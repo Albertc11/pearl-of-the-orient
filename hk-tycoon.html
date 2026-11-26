@@ -25,8 +25,7 @@ header{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;padding:10px 
 .stat small{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
 .stat b{font-size:15px;font-variant-numeric:tabular-nums}
 .grow{flex:1}
-main{display:grid;grid-template-columns:minmax(380px,1fr) 470px;gap:14px;padding:14px 16px}
-@media(max-width:980px){main{grid-template-columns:1fr}}
+main{display:grid;grid-template-columns:1fr;gap:8px;padding:10px 16px}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
 .lenses{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
 .lenses button.on{border-color:var(--gold);color:var(--gold)}
@@ -71,13 +70,13 @@ label.chk{font-size:12px;color:var(--dim);display:flex;gap:5px;align-items:cente
 <body>
 <header id="hdr"></header>
 <main>
-  <section class="card">
+  <div class="tabs" id="tabs" style="margin-bottom:0"></div>
+  <section class="card" id="mapView">
     <div class="lenses" id="lenses"></div>
-    <svg id="map" viewBox="0 0 640 500" style="width:100%;max-height:72vh"></svg>
+    <svg id="map" viewBox="0 0 640 500" style="width:100%;height:calc(100vh - 235px);min-height:420px;display:block;background:var(--sea);border-radius:10px;cursor:grab"></svg>
     <div class="legend" id="legend"></div>
   </section>
-  <section class="card">
-    <div class="tabs" id="tabs"></div>
+  <section class="card" id="panelView">
     <div id="panel"></div>
   </section>
 </main>
@@ -138,6 +137,12 @@ const SPECIAL=[
  {k:'MO',en:'Macau',zh:'澳門',r:5,c:-1,sp:'Casinos. Monopoly until 2002, then concessions'},
 ];
 const DM={};D.forEach(d=>DM[d.k]=d);
+// well-known neighbourhoods inside each district, so players can find places like Causeway Bay
+const AREAS={CW:'Central, Sheung Wan, Mid-Levels, The Peak, Kennedy Town',WC:'Wan Chai, Causeway Bay, Happy Valley, Tai Hang',EA:'North Point, Quarry Bay, Tai Koo, Shau Kei Wan, Chai Wan',
+ SO:'Aberdeen, Ap Lei Chau, Repulse Bay, Stanley, Pok Fu Lam',YT:'Tsim Sha Tsui, Jordan, Yau Ma Tei, Mong Kok',SS:'Sham Shui Po, Cheung Sha Wan, Shek Kip Mei, Mei Foo',
+ KC:'Kowloon City, Hung Hom, To Kwa Wan, Kowloon Tong, Ho Man Tin, Kai Tak',WT:'Wong Tai Sin, Diamond Hill, San Po Kong, Lok Fu',KT:'Kwun Tong, Ngau Tau Kok, Lam Tin, Yau Tong',
+ KW:'Kwai Chung, Tsing Yi',TW:'Tsuen Wan, Ma Wan, Sham Tseng',TM:'Tuen Mun, So Kwun Wat',YL:'Yuen Long, Tin Shui Wai, Kam Tin',NO:'Sheung Shui, Fanling, Sha Tau Kok',
+ TP:'Tai Po, Tai Po Market, Tai Wo',ST:'Sha Tin, Tai Wai, Fo Tan, Ma On Shan',SK:'Sai Kung, Tseung Kwan O, Clear Water Bay',IS:'Lantau, Tung Chung, Discovery Bay, Cheung Chau, Lamma'};
 const PT={
  flat:{n:'Flat (500 sq ft)',zh:'住宅',sqft:500,prem:1,yAdd:0,icon:'🏠'},
  shop:{n:'Street Shop (800 sq ft)',zh:'地舖',sqft:800,prem:2.2,yAdd:.012,icon:'🏪'},
@@ -214,18 +219,43 @@ function freshState(name,origin){
  return st;
 }
 function save(){try{localStorage.setItem('hktycoon',JSON.stringify(s))}catch(e){}}
-function load(){try{const j=localStorage.getItem('hktycoon');if(j)return JSON.parse(j)}catch(e){}return null}
+function load(){try{const j=localStorage.getItem('hktycoon');if(j){const g=JSON.parse(j);
+ // saves from before lifetime tracking: estimate what was put in from today's capital at the founding year's prices
+ for(const b of Object.values(g.biz||{}))if(b.inv==null){b.inv=b.cReal*CPI(b.since);b.earned=0;b.est=1;}
+ return g}}catch(e){}return null}
 function log(t){s.log.unshift({y:s.year,t});if(s.log.length>300)s.log.pop();}
 
 /* ================= VALUATION ================= */
 function propVal(p,y=s.year){return p.sqft*psf(p.d,y)*PT[p.t].prem}
 function rentYield(t,y,k){return Math.max(.005,regYld(k?REGION(k):'KL',y)+PT[t].yAdd)}
 function bizMult(k,y){const b=BZ[k];if(b.dyn){const r=HSI[y]/HSI[y-1]-1;return clamp(.5+3*r,-.5,3.5);}return interp(b.fac&&s.flags.reloc?b.kf2:b.kf,y)}
-function bizVal(k,y=s.year){const b=s.biz[k];const m=BZ[k].dyn?1:bizMult(k,y);return b.cReal*CPI(y)*clamp(m,.15,4)}
-function devVal(d){return d.spent*(PPI[s.year]/PPI[d.y])}
+function bizVal(k,y=s.year){const b=s.biz[k];const m=BZ[k].dyn?1:bizMult(k,y);return b.cReal*CPI(y)*clamp(m,.15,4)*upgMult(b)}
+function devVal(d){return d.spent*(PPI[s.year]/PPI[d.y])*(1-(d.presold||0))}  // pre-sold share already belongs to buyers
 function itemsVal(){return s.items.reduce((a,i)=>a+i.val,0)}
+/* ===== FINANCING: credit line, business loans, share pledges =====
+   Real HK groups funded land with revolving bank facilities, loans against operating companies
+   and founders' pledges of listed shares, not by selling assets. Limits below are game rules. */
+const CREDIT_SPREAD=1.5,LOAN_SPREAD=1,BIZ_LTV=.4,PLEDGE_LTV=.4,PLEDGE_CALL=.5;
+const bizDebt=()=>Object.values(s.biz).reduce((a,b)=>a+(b.loan||0),0);
+function otherDebt(){return (s.credit||0)+(s.pledge||0)+bizDebt()}
+const creditRate=y=>(PRIME(y)+CREDIT_SPREAD)/100, loanRate=y=>(PRIME(y)+LOAN_SPREAD)/100;
+function otherInterest(y){return (s.credit||0)*creditRate(y)+((s.pledge||0)+bizDebt())*loanRate(y)}
+// Credit limit: 40% of unborrowed business value + 30% of property equity, and the interest on everything
+// you owe must stay under half of last year's rent + business income.
+function creditLimit(){const y=s.year;
+ const assets=.4*Object.keys(s.biz).reduce((a,k)=>a+Math.max(0,bizVal(k)-(s.biz[k].loan||0)),0)+.3*s.props.reduce((a,p)=>a+Math.max(0,propVal(p)-p.loan),0);
+ const mortInt=(s.props.reduce((a,p)=>a+p.loan,0)+s.devs.reduce((a,d)=>a+d.loan,0))*mortRate(y)+((s.pledge||0)+bizDebt())*loanRate(y);
+ const service=Math.max(0,(.5*(s.lastIncome||0)-mortInt)/creditRate(y));return Math.max(0,Math.min(assets,service));}
+const stakeVal=()=>s.ipo?s.ipo.own*mcap():0;
+// Year-end checks after prices move: banks cut limits and call in loans that are no longer covered
+function marginCalls(){
+ const lim=creditLimit();if((s.credit||0)>lim+1){const x=s.credit-lim;s.credit=lim;s.cash-=x;notes.push(`<span class="neg">🏦 The bank cut your credit line: you had to repay ${money(x)}.</span>`);}
+ for(const k in s.biz){const b=s.biz[k],cap=bizVal(k)*.6;if((b.loan||0)>cap){const x=b.loan-cap;b.loan=cap;s.cash-=x;notes.push(`<span class="neg">🏦 Your ${BZ[k].n} lost value: the bank called in ${money(x)} of its loan.</span>`);}}
+ if(s.ipo&&(s.pledge||0)>stakeVal()*PLEDGE_CALL){const m=mcap(),x=s.pledge-stakeVal()*PLEDGE_LTV,cut=Math.min(s.ipo.own,x/Math.max(1,m));s.ipo.own-=cut;s.pledge-=x;
+  notes.push(`<span class="neg">📉 Margin call: the bank sold ${(cut*100).toFixed(1)}% of ${groupName()} from your pledged shares to cover ${money(x)}. You now own ${Math.round(s.ipo.own*100)}%.</span>`);}
+}
 function parts(){
- const prop=s.props.reduce((a,p)=>a+propVal(p),0), loans=s.props.reduce((a,p)=>a+p.loan,0)+s.devs.reduce((a,d)=>a+d.loan,0);
+ const prop=s.props.reduce((a,p)=>a+propVal(p),0), loans=s.props.reduce((a,p)=>a+p.loan,0)+s.devs.reduce((a,d)=>a+d.loan,0)+otherDebt();
  const dev=s.devs.reduce((a,d)=>a+devVal(d),0), biz=Object.keys(s.biz).reduce((a,k)=>a+bizVal(k),0), stk=s.units*HSI[s.year], it=itemsVal();
  return {cash:s.cash,prop,dev,loans,biz,stk,it,nw:s.cash+prop+dev-loans+biz+stk+it};
 }
@@ -243,12 +273,18 @@ function married(){return s.spouses.length>0}
 
 /* ================= ACTIONS ================= */
 const A={};
-A.selD=null;A.tab='District';A.lens='price';A.useLoan=true;A.ccy='HKD';
+A.selD=null;A.tab='Map';A.lens='price';A.useLoan=true;A.ccy='HKD';
 A.toggleCcy=()=>{A.ccy=A.ccy==='USD'?'HKD':'USD';render();};
-A.selectD=k=>{A.selD=k;A.tab='District';render();};
+A.selectD=k=>{if(A._dragged){A._dragged=false;return;}A.selD=k;A.tab='District';render();};
 A.setTab=t=>{A.tab=t;render();};
 A.setLens=l=>{A.lens=l;render();};
 A.toggleLoan=()=>{A.useLoan=!A.useLoan;render();};
+A.drawCredit=f=>{const room=Math.max(0,creditLimit()-(s.credit||0)),amt=room*f;if(amt<=0)return toast('No credit available');s.credit=(s.credit||0)+amt;s.cash+=amt;log(`Drew ${money(amt)} on the credit line.`);render();};
+A.repayCredit=f=>{const amt=Math.min(Math.max(0,s.cash),(s.credit||0)*f);s.credit-=amt;s.cash-=amt;render();};
+A.bizBorrow=k=>{const b=s.biz[k],room=Math.max(0,bizVal(k)*BIZ_LTV-(b.loan||0));if(room<=0)return;b.loan=(b.loan||0)+room;s.cash+=room;log(`Borrowed ${money(room)} against your ${BZ[k].n}.`);render();};
+A.bizRepay=k=>{const b=s.biz[k],amt=Math.min(Math.max(0,s.cash),b.loan||0);b.loan-=amt;s.cash-=amt;render();};
+A.pledgeBorrow=()=>{const room=Math.max(0,stakeVal()*PLEDGE_LTV-(s.pledge||0));if(room<=0)return;s.pledge=(s.pledge||0)+room;s.cash+=room;log(`Pledged shares in ${groupName()} for a ${money(room)} loan.`);render();};
+A.pledgeRepay=()=>{const amt=Math.min(Math.max(0,s.cash),s.pledge||0);s.pledge-=amt;s.cash-=amt;render();};
 function ownsResidential(){return s.props.some(p=>['flat','mansion','estate','building'].includes(p.t))}
 function buyCost(k,t){
  const p={d:k,t,sqft:PT[t].sqft};let price=propVal(p);if(s.flags.sars)price*=.8;
@@ -257,7 +293,8 @@ function buyCost(k,t){
 }
 A.buyProp=(k,t)=>{const c=buyCost(k,t);if(s.cash<c.need)return toast('Not enough cash');s.cash-=c.need;s.props.push({id:uid(),d:k,t,sqft:PT[t].sqft,cost:c.price,loan:c.loan,yb:s.year});log(`Bought ${PT[t].n} in ${DM[k].en} for ${money(c.price)}${c.loan?` (mortgage ${money(c.loan)})`:''}`);render();};
 function ssd(p){if(s.year>=2010&&s.year<2024&&s.year-p.yb<=2)return .15;return 0}
-A.sellProp=(id,frac=1)=>{const p=s.props.find(x=>x.id===id);if(!p)return;const v=propVal(p)*frac,l=p.loan*frac,fee=v*(.01+ssd(p));s.cash+=v-l-fee;log(`Sold ${frac<1?Math.round(frac*100)+'% of ':''}${PT[p.t].n} in ${DM[p.d].en} for ${money(v)}${ssd(p)?' (paid Special Stamp Duty)':''}`);if(frac>=1)s.props=s.props.filter(x=>x!==p);else{p.sqft*=1-frac;p.loan-=l;p.cost*=1-frac;}render();};
+function sellFrac(p,frac){const v=propVal(p)*frac,l=p.loan*frac,fee=v*(.01+ssd(p));s.cash+=v-l-fee;log(`Sold ${frac<1?Math.round(frac*100)+'% of ':''}${PT[p.t].n} in ${DM[p.d].en} for ${money(v)}${ssd(p)?' (paid Special Stamp Duty)':''}`);if(frac>=1)s.props=s.props.filter(x=>x!==p);else{p.sqft*=1-frac;p.loan-=l;p.cost*=1-frac;}return v}
+A.sellProp=(id,frac=1)=>{const p=s.props.find(x=>x.id===id);if(!p)return;sellFrac(p,frac);render();};
 A.repay=id=>{const p=s.props.find(x=>x.id===id);const r=Math.min(Math.max(0,s.cash),p.loan);p.loan-=r;s.cash-=r;render();};
 A.remortgage=id=>{const p=s.props.find(x=>x.id===id);const max=propVal(p)*LTV(s.year);if(p.loan<max){s.cash+=max-p.loan;log(`Remortgaged ${DM[p.d].en} ${PT[p.t].n}: +${money(max-p.loan)}`);p.loan=max;}render();};
 function genAuctions(){
@@ -269,17 +306,45 @@ function genAuctions(){
   const land=v*landF;s.auctions.push({id:uid(),d:d.k,sqft,land,build:v*.25,rivals,rivalMax:land*(1+Math.max(0,.03+heat*.8+Math.random()*.25))});}
 }
 const BIDS=[0,.15,.3,.5];
+A.jv=false;A.toggleJV=()=>{A.jv=!A.jv;render();};
+const jvPartner=a=>RIVALS.map(r=>r.co).find(c=>!a.rivals.includes(c));
 // English auction: the highest bidder wins and pays just above the runner-up's ceiling (never below the reserve)
 A.bidSite=(id,i)=>{const a=s.auctions.find(x=>x.id===id);const bid=a.land*(1+BIDS[i]);
  s.auctions=s.auctions.filter(x=>x!==a);
  if(bid<a.rivalMax){const win=a.rivals[0];log(`Outbid for the ${(a.sqft/1000)}k sq ft site in ${DM[a.d].en}: ${win} paid about ${money(a.rivalMax)}.`);toast(`${win} outbid you at about ${money(a.rivalMax)}`);return render();}
- const price=Math.max(a.land,Math.min(bid,a.rivalMax*1.01));const L=A.useLoan?price*.5:0;
+ const full=Math.max(a.land,Math.min(bid,a.rivalMax*1.01));
+ // joint venture: a partner group pays half and takes half of the flats, costs and profit
+ const sh=A.jv?.5:1,partner=A.jv?jvPartner(a):null,price=full*sh,sq=a.sqft*sh,bld=a.build*sh;const L=A.useLoan?price*.5:0;
  if(s.cash<price-L){s.auctions.push(a);return toast('Not enough cash');}
- s.cash-=price-L;s.devs.push({id:uid(),d:a.d,sqft:a.sqft,y:s.year,done:s.year+3,spent:price,buildTotal:a.build,left:3,loan:L});
- log(`Won government land sale: ${(a.sqft/1000)}k sq ft site in ${DM[a.d].en} for ${money(price)}, beating ${a.rivals.join(' and ')}`);toast(`Won the site for ${money(price)}`);render();};
-A.buyBiz=k=>{const c=BZ[k].cost*CPI(s.year);if(s.cash<c)return toast('Not enough cash');s.cash-=c;s.biz[k]={cReal:BZ[k].cost,since:s.year,last:0};log(`Founded ${BZ[k].n} with ${money(c)}`);render();};
+ s.cash-=price-L;s.devs.push({id:uid(),d:a.d,sqft:sq,y:s.year,done:s.year+3,spent:price,buildTotal:bld,left:3,loan:L,presold:0,partner});
+ log(`Won government land sale: ${(a.sqft/1000)}k sq ft site in ${DM[a.d].en} for ${money(full)}, beating ${a.rivals.join(' and ')}${partner?`, in a 50/50 joint venture with ${partner}`:''}`);render();
+ const y=s.year,val=sq*psf(a.d,y)*1.05,inst=bld/3,rate=mortRate(y);
+ showModal(`<div class="yr">${y} · LAND SALE WON 投地成功</div><h2>${(a.sqft/1000)}k sq ft site in ${DM[a.d].en}</h2>
+ <p>You beat ${a.rivals.join(' and ')}${partner?`, bidding with <b>${partner}</b> as a 50/50 joint venture. Everything below is <b>your half</b>`:''}. Here is what happens next:</p>
+ <table><tr><td><b>${y}</b> · Land paid now</td><td class="n">${money(price-L)} cash${L?` + ${money(L)} bank loan`:''}</td></tr>
+ ${[1,2,3].map(i=>`<tr><td><b>${y+i}</b> · Construction instalment ${i} of 3</td><td class="n">${money(inst)}</td></tr>`).join('')}
+ ${L?`<tr><td>Each year until sold · Interest on the land loan</td><td class="n">about ${money(L*rate)}</td></tr>`:''}
+ <tr><td><b>${y+3}</b> · Completion: ${Math.round(sq/500).toLocaleString()} flats of 500 sq ft</td><td class="n">worth about ${money(val)} at today's prices</td></tr>
+ <tr><th>Estimated profit at today's prices</th><th class="n ${val-price-bld>=0?'pos':'neg'}">${money(val-price-bld)}</th></tr></table>
+ <p class="dim">The site's value moves with the property market while it is built. From the Empire tab you can <b>pre-sell flats</b> before completion to bring in cash early, at 10% below market. When it completes you choose: keep the flats and collect rent, sell them all, or sell 25% a year.</p>
+ <div class="choices"><button class="primary" onclick="closeModal()">Got it</button></div>`);};
+A.devChoice=(id,c)=>{const p=s.props.find(x=>x.id===id);if(!p)return;let msg;
+ if(c==='sell'){msg=`Sold all flats for ${money(sellFrac(p,1))}.`;}
+ else if(c==='grad'){p.gradual=4;msg='Flats will be sold in four yearly tranches, at each year\'s prices. Rent comes in on the unsold flats meanwhile.';log(`${DM[p.d].en} estate: selling 25% a year.`);}
+ else msg='Keeping the flats to rent out. You can still sell from the Empire tab.';
+ const el=document.getElementById('cmp-'+id);if(el)el.innerHTML='🏗️ '+msg;render();};
+// Pre-sales: sell a quarter of the flats before completion at 10% below today's completed value
+A.presell=id=>{const d=s.devs.find(x=>x.id===id);if(!d||(d.presold||0)>=.75)return;const c=.25*d.sqft*psf(d.d,s.year)*1.05*.9;s.cash+=c;d.presold=(d.presold||0)+.25;
+ log(`Pre-sold 25% of the flats at your ${DM[d.d].en} site for ${money(c)}.`);render();};
+A.buyBiz=k=>{const c=BZ[k].cost*CPI(s.year);if(s.cash<c)return toast('Not enough cash');s.cash-=c;s.biz[k]={cReal:BZ[k].cost,since:s.year,last:0,inv:c,earned:0};log(`Founded ${BZ[k].n} with ${money(c)}`);render();};
+// Upgrades raise the profit rate by 15% each (max 3); growing adds capital in steps
+const UPG=['New machinery & systems','Professional managers','Brand & marketing'];
+const upgMult=b=>1+.15*(b.lvl||0);
+const upgCost=b=>b.cReal*CPI(s.year)*.4*((b.lvl||0)+1);
+A.upgradeBiz=k=>{const b=s.biz[k];if((b.lvl||0)>=3)return;const c=upgCost(b);if(s.cash<c)return toast('Not enough cash');s.cash-=c;b.inv=(b.inv||0)+c;b.lvl=(b.lvl||0)+1;log(`${BZ[k].n}: ${UPG[b.lvl-1]} (${money(c)}). Profit rate now +${b.lvl*15}%.`);render();};
+A.growBiz=(k,f)=>{const b=s.biz[k];const c=b.cReal*CPI(s.year)*f;if(s.cash<c)return toast('Not enough cash');s.cash-=c;b.inv=(b.inv||0)+c;b.cReal*=1+f;log(`Grew your ${BZ[k].n} by ${f*100}% (${money(c)})`);render();};
 A.expandBiz=k=>{const b=s.biz[k];const c=b.cReal*CPI(s.year);if(s.cash<c)return toast('Not enough cash');s.cash-=c;b.cReal*=2;log(`Doubled the size of your ${BZ[k].n} (${money(c)})`);render();};
-A.sellBiz=k=>{const v=bizVal(k);s.cash+=v;delete s.biz[k];log(`Sold ${BZ[k].n} for ${money(v)}`);render();};
+A.sellBiz=k=>{const v=bizVal(k),b=s.biz[k];s.cash+=v-(b.loan||0);delete s.biz[k];const g=v+(b.earned||0)-(b.inv||0);log(`Sold ${BZ[k].n} for ${money(v)}. Lifetime: put in ${money(b.inv||0)}, took out ${money(b.earned||0)} in profits, ${g>=0?'gain':'loss'} ${money(Math.abs(g))}`);render();};
 function factoryCap(){return ['garment','toys','elec'].reduce((a,k)=>a+(s.biz[k]?s.biz[k].cReal*CPI(s.year):0),0)}
 A.relocate=()=>{const c=factoryCap()*.3;if(s.cash<c)return toast('Not enough cash');s.cash-=c;s.flags.reloc=1;log(`Relocated factories to Shenzhen (${money(c)})`);render();};
 const IPO_NAV=20e6,IPO_FACE=15;
@@ -287,7 +352,7 @@ function ipoOk(){return !s.ipo&&parts().nw>=IPO_NAV*CPI(s.year)&&face()>=IPO_FAC
 A.ipo=()=>{if(!ipoOk())return;const c=.25*mcap();s.cash+=c;s.ipo={own:.75,y:s.year};s.faceBase+=5;log(`${groupName()} lists on the stock exchange. Sold 25% to the public for ${money(c)}.`);render();};
 A.placement=()=>{if(!s.ipo||s.ipo.own<.45)return;const c=.1*mcap();s.cash+=c;s.ipo.own-=.1;log(`Placed 10% of ${groupName()} with investors for ${money(c)}.`);render();};
 function privCost(){return s.ipo?(1-s.ipo.own)*mcap()*1.3:0}
-A.privatise=()=>{const c=privCost();if(!s.ipo||s.cash<c)return;s.cash-=c;s.ipo=null;log(`Took ${groupName()} private, buying out minority shareholders for ${money(c)}.`);render();};
+A.privatise=()=>{const c=privCost();if(!s.ipo||s.cash<c)return;if(s.pledge)return toast('Repay your share-pledge loan before taking the company private');s.cash-=c;s.ipo=null;log(`Took ${groupName()} private, buying out minority shareholders for ${money(c)}.`);render();};
 A.buyHSI=f=>{const amt=Math.max(0,s.cash)*f;if(amt<=0)return;s.units+=amt*.995/HSI[s.year];s.cash-=amt;render();};
 A.sellHSI=f=>{const u=s.units*f;s.cash+=u*HSI[s.year]*.995;s.units-=u;render();};
 A.derby=()=>{if(s.flags.derby)return;s.flags.derby=1;const bet=Math.max(0,s.cash)*.1;const win=Math.random()<.2+(s.luck||0)/2;s.cash+=win?bet*3.5:-bet;const msg=win?`Your horse romped home at 9-2! You won ${money(bet*3.5)}.`:`Your horse finished down the field. Lost ${money(bet)}.`;log('Derby bet: '+msg);toast(msg);render();};
@@ -296,6 +361,8 @@ A.buyItem=k=>{const c=IT[k].cost*CPI(s.year);if(s.cash<c)return toast('Not enoug
 A.sellItem=id=>{const i=s.items.find(x=>x.id===id);s.cash+=i.val*.9;s.items=s.items.filter(x=>x!==i);render();};
 A.donate=lvl=>{const amt=[1e5,1e6,1e7][lvl]*CPI(s.year),f=[3,10,25][lvl];if(s.cash<amt)return toast('Not enough cash');s.cash-=amt;s.faceBase+=f;log(`Donated ${money(amt)} — "${s.name} ${['Scholarship','Hospital Wing','University Tower'][lvl]}" (+${f} Reputation)`);render();};
 A.divorce=i=>{const sp=s.spouses[i];const cost=Math.max(0,netWorth())*.2;s.cash-=cost;s.spouses.splice(i,1);s.faceBase-=3;log(`Divorced ${sp.name}. Settlement ${money(cost)}.`);render();};
+A.court=divorceFirst=>{const p=pageantNow();if(!p||s.cash<courtGift())return;if(divorceFirst&&married())A.divorce(0);if(married()&&s.flags.mono)return;p.done=1;log(tryCourt(p.name,p.y,courtOdds(),courtGift()));render();};
+A.gala=()=>{const p=pageantNow();if(!p)return;p.done=1;s.faceBase+=1;log('You attend the Miss Hong Kong gala and are photographed by the gossip magazines. +1 Reputation.');render();};
 
 /* ================= EVENTS ================= */
 function typhoon(sig){
@@ -353,8 +420,8 @@ const EVENTS=[
  {y:2000,t:'Dot-com mania',zh:'科網熱潮',txt:'Tech listings are oversubscribed hundreds of times. Electronics makers are hot.',fx:()=>{s.shock.elec=1.8;s.shock.broker=1.3}},
  {y:2001,t:'Dot-com bust and 9/11',zh:'科網爆破',txt:'Tech collapses and deflation sets in.',fx:()=>{s.shock.elec=.5}},
  {y:2002,t:'Macau ends the gaming monopoly',zh:'澳門賭權開放',txt:'After 40 years, Macau will award three gaming concessions. Bidders need deep pockets and connections.',
-  choices:[{l:'Bid for a full concession (HK$4B; needs net worth HK$3B and Reputation 50)',ok:()=>netWorth()>=3e9&&face()>=50&&s.cash>=4e9,fx:()=>{s.cash-=4e9;s.biz.casino={cReal:4e9/CPI(2002),since:2002,last:0};s.faceBase+=10;return 'YOU WON A CONCESSION. You are a Macau gaming king.'}},
-   {l:'Take a 10% stake in a winning bidder (HK$400M; needs net worth HK$300M, Reputation 25)',ok:()=>netWorth()>=3e8&&face()>=25&&s.cash>=4e8,fx:()=>{s.cash-=4e8;s.biz.casino={cReal:4e8/CPI(2002),since:2002,last:0};s.faceBase+=4;return 'You are now a casino partner.'}},
+  choices:[{l:'Bid for a full concession (HK$4B; needs net worth HK$3B and Reputation 50)',ok:()=>netWorth()>=3e9&&face()>=50&&s.cash>=4e9,fx:()=>{s.cash-=4e9;s.biz.casino={cReal:4e9/CPI(2002),since:2002,last:0,inv:4e9,earned:0};s.faceBase+=10;return 'YOU WON A CONCESSION. You are a Macau gaming king.'}},
+   {l:'Take a 10% stake in a winning bidder (HK$400M; needs net worth HK$300M, Reputation 25)',ok:()=>netWorth()>=3e8&&face()>=25&&s.cash>=4e8,fx:()=>{s.cash-=4e8;s.biz.casino={cReal:4e8/CPI(2002),since:2002,last:0,inv:4e8,earned:0};s.faceBase+=4;return 'You are now a casino partner.'}},
    {l:'Pass',fx:()=>'Others will get rich in Macau.'}]},
  {y:2002,t:'TKO Line opens',zh:'將軍澳綫通車',txt:'Tseung Kwan O new town is connected. Sai Kung district booms.'},
  {y:2003,t:'SARS',zh:'沙士',txt:'Amoy Gardens. 299 dead. Restaurants are empty and property is 62% below the 1997 peak. Distressed sellers everywhere: all property costs 20% less this year.',fx:()=>{s.flags.sars=1;s.shock.food=.3;s.shock.retail=.5;s.shock.film=.6}},
@@ -387,7 +454,8 @@ function randomEvents(y){
   choices:[{l:`Pay the "tea money" (${money(15e3*CPI(y))}/yr equivalent, +15% business profit)`,ok:()=>s.cash>=15e3*CPI(y),fx:()=>{s.cash-=15e3*CPI(y);s.flags.bribed=1;return 'Inspections become strangely rare.'}},{l:'Refuse',fx:()=>{Object.keys(s.biz).forEach(k=>s.shock[k]=.9);return 'Your licences take months to renew. Business -10% this year.'}}]});}
  if((y===1975||y===1976)&&s.flags.bribed&&Math.random()<.3)ev.push({t:'ICAC investigation',zh:'廉署調查',txt:'Two polite officers ask about payments to a police syndicate.',fx:()=>{const l=Math.max(0,s.cash)*.25;s.cash-=l;s.faceBase-=15;s.flags.bribed=0;return `You settle. Lost ${money(l)}.`}});
  if(!fixedTyphoon&&Math.random()<.35)ev.push({t:'Typhoon Signal No. 8',zh:'八號風球',txt:'The city shuts down for a day and a half. Mahjong tables everywhere.',fx:()=>typhoon(8)});
- if(y>=1973)ev.push(missHK(y));
+ // Miss Hong Kong is no longer a popup: the winner is announced in the ticker and courted from the Lifestyle tab
+ if(y>=1973)s.pageant={y,name:SURN[(y*7)%SURN.length]+' '+GIVEN[(y*11)%GIVEN.length],done:0};
  if(Math.random()<.1&&s.cash>0)ev.push({t:'A hot stock tip',zh:'貼士',txt:'Your barber swears a small-cap is about to be "injected with assets" by a mainland parent.',
   choices:[{l:'Punt 10% of cash',fx:()=>{const a=s.cash*.1,m=Math.random()<.4+(s.luck||0)?1+Math.random()*2:Math.random()*.5;s.cash+=a*(m-1);return m>1?`It flew! You made ${money(a*(m-1))}.`:`It collapsed. Lost ${money(a*(1-m))}.`}},{l:'Ignore it',fx:()=>''}]});
  if(Math.random()<.07)ev.push({t:'A feng shui master',zh:'風水師傅',txt:'He says your desk faces the wrong way and your front door lets the money out.',
@@ -399,15 +467,8 @@ function randomEvents(y){
  if(!s.title&&face()>=60){ev.push({t:y<1997?'Knighthood':'Grand Bauhinia Medal',zh:y<1997?'封爵':'大紫荊勳章',txt:y<1997?'Your name appears in the Queen\'s Birthday Honours list. Arise, Sir.':'The Chief Executive awards you the territory\'s highest honour.',fx:()=>{s.title=y<1997?'Sir':'GBM';return '+10 Reputation'}});}
  return ev;
 }
-function missHK(y){
- const name=SURN[(y*7)%SURN.length]+' '+GIVEN[(y*11)%GIVEN.length];const P=clamp(.05+face()/80,.05,.9);const gift=150e3*CPI(y);
- const can=!married()||(!s.flags.mono);
- return {t:`Miss Hong Kong ${y} is crowned`,zh:'香港小姐競選',txt:`${name} wins the crown on TVB. The whole city watched. Every tycoon in town wants an introduction.`,
-  choices:[{l:`Court her (gifts ${money(gift)}, ${Math.round(P*100)}% chance)`,ok:()=>can&&s.cash>=gift,fx:()=>tryCourt(name,y,P,gift)},
-   {l:`Divorce first, then court her (settlement 20% of net worth + gifts, ${Math.round(P*100)}% chance)`,ok:()=>married()&&s.flags.mono&&s.cash>=gift+netWorth()*.2,fx:()=>{A.divorce(0);return tryCourt(name,y,P,gift)}},
-   {l:'Attend the coronation gala (+1 Reputation)',fx:()=>{s.faceBase+=1;return 'You are photographed by the gossip magazines.'}},
-   {l:'Stay home',fx:()=>''}]};
-}
+function pageantNow(){return s.pageant&&s.pageant.y===s.year&&!s.pageant.done?s.pageant:null}
+const courtOdds=()=>clamp(.05+face()/80,.05,.9), courtGift=()=>150e3*CPI(s.year);
 function tryCourt(name,y,P,gift){s.cash-=gift;if(Math.random()<P){s.spouses.push({name,src:`Miss Hong Kong ${y}`,face:8,cost:40e3});s.faceBase+=2;return `Front page of every paper: ${s.name} marries Miss Hong Kong ${name}!`}return `${name} politely declines. The magazines laugh at you.`}
 
 /* ================= YEAR TURN ================= */
@@ -435,11 +496,13 @@ function nextEvent(){
 A.choose=i=>{const e=A._cur;let r='';if(i>=0)r=e.choices[i].fx()||'';else if(e.fx)r=e.fx()||'';if(i>=0&&e.fx)r=(e.fx()||'')+' '+r;if(e.fx2)e.fx2();
  if(r.trim()){notes.push(`<b>${e.t}:</b> ${r}`);log(`${e.t}: ${r}`);}nextEvent();};
 function simulate(){
+ // estates on a "sell 25% a year" plan: sell this year's tranche at the start of the year
+ s.props.filter(p=>p.gradual>0).forEach(p=>{const v=sellFrac(p,1/p.gradual);p.gradual--;notes.push(`🏘️ Sold a tranche of flats at your ${DM[p.d].en} estate for ${money(v)}${p.gradual?` (${p.gradual} left)`:' (all sold)'}.`);});
  const y0=s.year,preP=new Map(s.props.map(p=>[p.id,propVal(p,y0)])),preB={},preU=s.units,preD=s.devs.reduce((a,d)=>a+devVal(d),0);for(const k in s.biz)preB[k]=bizVal(k,y0);
  const y=s.year+1;s.year=y;s.age++;const luck=s.luck||0;const L=[];
  let rent=0;s.props.forEach(p=>rent+=propVal(p,y)*rentYield(p.t,y,p.d));
  let bizP=0;for(const k in s.biz){const b=s.biz[k];let m=bizMult(k,y)*(s.shock[k]??1);if(s.flags.bribed&&y<1977)m*=1.15;if(s.origin==='chiu'&&k==='trading')m*=1.25;if(k==='horse')continue;
-  const pr=b.cReal*CPI(y)*BZ[k].roi*m*(.75+Math.random()*.5+luck);b.last=pr;bizP+=pr;L.push([BZ[k].icon+' '+BZ[k].n,pr]);}
+  const pr=b.cReal*CPI(y)*BZ[k].roi*m*upgMult(b)*(.75+Math.random()*.5+luck);b.last=pr;b.earned=(b.earned||0)+pr;bizP+=pr;L.push([BZ[k].icon+' '+BZ[k].n,pr]);}
  const div=s.units*HSI[y]*.035;
  let horse=0;s.items.forEach(i=>{if(i.k==='horse')horse+=i.cost*(Math.random()*.5-.12)*(y>=1978?1.4:1)});
  const sal=Object.keys(s.biz).length?0:6000*CPI(y)*(1+.05*(s.age-22));
@@ -447,10 +510,13 @@ function simulate(){
  const living=(5e3+s.spouses.reduce((a,sp)=>a+(sp.cost||4e3),0)+2e3*s.kids)*CPI(y);
  let upkeep=0;s.items.forEach(i=>upkeep+=i.val*IT[i.k].up);
  let build=0;s.devs.forEach(d=>{if(d.left>0){const p=d.buildTotal/3;build+=p;d.left--;d.spent+=p;}});
- const tax=Math.max(0,rent+bizP-interest)*.15;const extra=s.extra;s.extra=0;
- const divOut=s.ipo?(1-s.ipo.own)*Math.max(0,rent+bizP-interest-tax)*.4:0;
- const net=rent+bizP+div+horse+sal-interest-living-upkeep-build-tax-extra-divOut;s.cash+=net;
- const done=s.devs.filter(d=>y>=d.done);done.forEach(d=>{s.props.push({id:uid(),d:d.d,t:'estate',sqft:d.sqft,cost:d.spent,loan:d.loan,yb:y});notes.push(`🏗️ Your ${(d.sqft/1000)}k sq ft development in ${DM[d.d].en} is complete, worth ${money(d.sqft*psf(d.d,y)*1.05)}.`);});
+ const othInt=otherInterest(y);s.lastIncome=rent+bizP;
+ const tax=Math.max(0,rent+bizP-interest-othInt)*.15;const extra=s.extra;s.extra=0;
+ const divOut=s.ipo?(1-s.ipo.own)*Math.max(0,rent+bizP-interest-othInt-tax)*.4:0;
+ const net=rent+bizP+div+horse+sal-interest-othInt-living-upkeep-build-tax-extra-divOut;s.cash+=net;
+ s.completed=[];
+ const done=s.devs.filter(d=>y>=d.done);done.forEach(d=>{const keep=1-(d.presold||0),id=uid();s.props.push({id,d:d.d,t:'estate',sqft:d.sqft*keep,cost:d.spent*keep,loan:d.loan,yb:y});s.completed.push(id);
+  notes.push(`🏗️ Your ${(d.sqft/1000)}k sq ft development in ${DM[d.d].en} is complete${keep<1?` (${Math.round((1-keep)*100)}% of flats were pre-sold and handed to buyers)`:''}, worth ${money(d.sqft*keep*psf(d.d,y)*1.05)}.`);});
  s.devs=s.devs.filter(d=>y<d.done);
  let dep=0;s.items.forEach(i=>{const d=i.val*IT[i.k].dep;dep+=d;i.val-=d;});
  if(married()&&s.kids<5&&s.age<62&&Math.random()<.3){s.kids++;notes.push(`👶 A child is born! You now have ${s.kids}.`);s.heirs=null;log('A child is born.');}
@@ -462,6 +528,7 @@ function simulate(){
  let bizRe=0;for(const k in s.biz)if(k in preB)bizRe+=bizVal(k,y)-preB[k];
  const devRe=s.devs.reduce((a,d)=>a+devVal(d),0)+s.props.filter(p=>!preP.has(p.id)&&p.t==='estate'&&p.yb===y).reduce((a,p)=>a+propVal(p,y),0)-preD;
  const stkRe=preU*(HSI[y]-HSI[y0]);
+ marginCalls();
  if(s.cash<0)liquidate();
  genAuctions();
  const nw=netWorth();s.hist.push({y,nw});save();
@@ -469,13 +536,13 @@ function simulate(){
  const why=[['🏠 Property prices',propRe],['🏭 Business values',bizRe],['📈 Hang Seng holdings',stkRe],['🏗️ Developments (value growth plus construction spending)',devRe],['💵 Cash flow (income minus costs)',net],['🚗 Depreciation of toys',-dep]];
  why.push(['🎲 Events, deals, developments and other',navChg-why.reduce((a,w)=>a+w[1],0)]);
  if(s.ipo||snap.nw!==snap.nav)why.push(['🏛️ Share price vs net assets (listed group)',(nw-snap.nw)-navChg]);
- return {y,L,rent,bizP,div,horse,sal,interest,living,upkeep,build,tax,extra,divOut,net,nw,chg:nw-snap.nw,why};
+ return {y,L,rent,bizP,div,horse,sal,interest,othInt,living,upkeep,build,tax,extra,divOut,net,nw,chg:nw-snap.nw,why};
 }
 function liquidate(){
  notes.push('<span class="neg"><b>Cash crunch!</b> Your creditors force sales:</span>');
  if(s.units>0&&s.cash<0){const v=s.units*HSI[s.year]*.99;s.cash+=v;s.units=0;notes.push(`• Hang Seng holdings sold: ${money(v)}`);}
  while(s.cash<0&&s.items.length){const i=s.items.pop();s.cash+=i.val*.7;notes.push(`• ${IT[i.k].n} sold`);}
- for(const k of Object.keys(s.biz)){if(s.cash>=0)break;const v=bizVal(k)*.7;s.cash+=v;delete s.biz[k];notes.push(`• ${BZ[k].n} fire-sold for ${money(v)}`);}
+ for(const k of Object.keys(s.biz)){if(s.cash>=0)break;const v=bizVal(k)*.7;s.cash+=v-(s.biz[k].loan||0);delete s.biz[k];notes.push(`• ${BZ[k].n} fire-sold for ${money(v)}`);}
  s.props.sort((a,b)=>(propVal(b)-b.loan)-(propVal(a)-a.loan));
  while(s.cash<0&&s.props.length){const p=s.props.shift();const v=propVal(p)*.9-p.loan;s.cash+=v;notes.push(`• Bank repossessed ${PT[p.t].n} in ${DM[p.d].en} (equity ${money(v)})`);}
  while(s.cash<0&&s.devs.length){const d=s.devs.shift();s.cash+=d.spent*.5-d.loan;notes.push(`• Unfinished site in ${DM[d.d].en} sold at a loss`);}
@@ -485,9 +552,13 @@ function showReport(r){
  const row=(l,v)=>`<tr><td>${l}</td><td class="n ${v<0?'neg':'pos'}">${money(v)}</td></tr>`;
  let h=`<div class="yr">ANNUAL REPORT</div><h2>${r.y} <span class="zh">年結</span></h2>`;
  if(notes.length)h+='<div class="item">'+notes.join('<br>')+'</div>';
+ (s.completed||[]).map(id=>s.props.find(p=>p.id===id)).filter(Boolean).forEach(p=>{const v=propVal(p);
+  h+=`<div class="item" id="cmp-${p.id}" style="border-color:var(--cyan)">🏗️ <b>Your ${DM[p.d].en} estate is finished: ${Math.round(p.sqft/500).toLocaleString()} flats worth ${money(v)}.</b> What now?
+  <div class="row"><button class="sm" onclick="A.devChoice('${p.id}','keep')">Keep and rent out (about ${money(v*rentYield('estate',s.year,p.d))}/yr)</button><button class="sm" onclick="A.devChoice('${p.id}','sell')">Sell all now (${money(v)})</button><button class="sm" onclick="A.devChoice('${p.id}','grad')">Sell 25% a year</button></div></div>`;});
+ if(s.auctions.length)h+=`<div class="item" style="border-color:var(--gold)">🏗️ <b>New government land sales for ${r.y}:</b> ${landSaleLinks(true)}. Rival developers will bid too.</div>`;
  h+='<table>';
  if(r.sal)h+=row('Salary',r.sal);if(r.rent)h+=row('Rental income',r.rent);r.L.forEach(([l,v])=>h+=row(l,v));if(r.div)h+=row('Hang Seng dividends',r.div);if(r.horse)h+=row('Racing prize money',r.horse);
- if(r.interest)h+=row('Mortgage interest @ '+pc(mortRate(r.y)),-r.interest);h+=row('Household ('+(s.spouses.length?s.spouses.length+' spouse(s), ':'')+s.kids+' kids)',-r.living);if(r.upkeep)h+=row('Upkeep of toys',-r.upkeep);if(r.build)h+=row('Construction payments',-r.build);if(r.tax)h+=row('Profits tax (15%)',-r.tax);if(r.extra)h+=row('Typhoon repairs',-r.extra);if(r.divOut)h+=row('Dividends to outside shareholders',-r.divOut);
+ if(r.interest)h+=row('Mortgage interest @ '+pc(mortRate(r.y)),-r.interest);if(r.othInt)h+=row('Interest on credit line, business and share loans',-r.othInt);h+=row('Household ('+(s.spouses.length?s.spouses.length+' spouse(s), ':'')+s.kids+' kids)',-r.living);if(r.upkeep)h+=row('Upkeep of toys',-r.upkeep);if(r.build)h+=row('Construction payments',-r.build);if(r.tax)h+=row('Profits tax (15%)',-r.tax);if(r.extra)h+=row('Typhoon repairs',-r.extra);if(r.divOut)h+=row('Dividends to outside shareholders',-r.divOut);
  h+=`<tr><th>Net cash flow</th><th class="n ${r.net<0?'neg':'pos'}">${money(r.net)}</th></tr></table>`;
  h+=`<p>Net worth: <b class="gold">${money(r.nw)}</b> <span class="${r.chg>=0?'pos':'neg'}">(${r.chg>=0?'+':''}${money(r.chg)})</span> · Property index ${PPI[r.y-1]}→${PPI[r.y]} · Hang Seng ${HSI[r.y-1].toLocaleString()}→${HSI[r.y].toLocaleString()}</p>`;
  const big=Math.max(1,...r.why.map(w=>Math.abs(w[1])));
@@ -539,71 +610,112 @@ function richTable(l){return '<table><tr><th>#</th><th>Tycoon</th><th>Group</th>
 function showModal(h){$('#modal').innerHTML=h;$('#modalBg').style.display='flex';}
 function closeModal(){$('#modalBg').style.display='none';}
 let toastT;function toast(t){const el=$('#tip');el.innerHTML=t;el.style.display='block';el.style.left='50%';el.style.top='70px';el.style.transform='translateX(-50%)';clearTimeout(toastT);toastT=setTimeout(()=>{el.style.display='none';el.style.transform=''},2600);}
-function render(){if(!s)return;renderHeader();renderMap();renderTabs();renderPanel();renderTicker();$('#endBtn').textContent=s.year>=2025?'Final reckoning ▶':`End ${s.year} ▶`;$('#endBtn').disabled=!!s.over;}
+function render(){if(!s)return;renderHeader();renderTabs();renderPanel();renderMap();renderTicker();$('#endBtn').textContent=s.year>=2025?'Final reckoning ▶':`End ${s.year} ▶`;$('#endBtn').disabled=!!s.over;}
 function renderHeader(){
  const p=parts();const st=(l,v,c='')=>`<div class="stat"><small>${l}</small><b class="${c}">${v}</b></div>`;
- $('#hdr').innerHTML=`<div class="logo"><b>東方之珠</b> Pearl of the Orient<span>HK Tycoon</span></div>`+st('Year',s.year,'cyan')+st('Age',s.age)+st('Cash',money(s.cash),s.cash<0?'neg':'')+st('Net worth',money(netWorth()),'gold')+st('Reputation 名望',face())+`<button class="sm" onclick="A.toggleCcy()" title="Show values in HK$ or US$ at this year's exchange rate">${A.ccy==='USD'?'Show HK$':'Show US$'}</button>`+'<div class="grow"></div>'+st('Hang Seng',HSI[s.year].toLocaleString())+st('Property idx',PPI[s.year])+st('Prime',PRIME(s.year).toFixed(2)+'%')+st('Max LTV',Math.round(LTV(s.year)*100)+'%')+st('Population',(totalPop(s.year)/1e6).toFixed(2)+'M');
+ $('#hdr').innerHTML=`<div class="logo"><b>東方之珠</b> Pearl of the Orient<span>HK Tycoon</span></div>`+st('Year',s.year,'cyan')+st('Age',s.age)+st('Cash',money(s.cash),s.cash<0?'neg':'')+st('Net worth',money(netWorth()),'gold')+st('Reputation 名望',face()).replace('<div class="stat"',`<div class="stat" style="cursor:pointer" title="See how reputation is earned" onclick="A.setTab('Lifestyle')"`)+`<button class="sm" onclick="A.toggleCcy()" title="Show values in HK$ or US$ at this year's exchange rate">${A.ccy==='USD'?'Show HK$':'Show US$'}</button>`+'<div class="grow"></div>'+st('Hang Seng',HSI[s.year].toLocaleString())+st('Property idx',PPI[s.year])+st('Prime',PRIME(s.year).toFixed(2)+'%')+st('Max LTV',Math.round(LTV(s.year)*100)+'%')+st('Population',(totalPop(s.year)/1e6).toFixed(2)+'M');
 }
 const LENSES={price:'Price / sq ft',pop:'Population',growth:'10-yr growth',mtr:'Rail',mine:'Your holdings'};
 function lensVal(d,y){switch(A.lens){case'price':return psf(d.k,y);case'pop':return popOf(d,y);case'growth':return popOf(d,Math.min(2025,y+0))/popOf(d,Math.max(1970,y-10))-1;case'mtr':return d.mtr.filter(m=>y>=m[0]).length+d.mtr.filter(m=>y<m[0]&&y>=m[0]-3).length*.4;case'mine':return s.props.filter(p=>p.d===d.k).reduce((a,p)=>a+propVal(p),0)+s.devs.filter(x=>x.d===d.k).reduce((a,x)=>a+devVal(x),0);}}
 function lensLabel(v){switch(A.lens){case'price':return '$'+(v>=1000?(v/1000).toFixed(1)+'k':Math.round(v));case'pop':return (v/1000).toFixed(0)+'k';case'growth':return (v>=0?'+':'')+Math.round(v*100)+'%';case'mtr':return v?'🚇'.repeat(Math.ceil(v)):'—';case'mine':return v?money(v).replace('HK$',''):'';}}
 function color(t){t=clamp(t,0,1);const h=220-220*t,l=document.body.classList.contains('light')?84-26*t:22+30*t;return `hsl(${h},70%,${l}%)`}
 A.toggleTheme=()=>{const L=document.body.classList.toggle('light');try{localStorage.setItem('hktheme',L?'light':'dark')}catch(e){}$('#themeBtn').textContent=L?'Dark mode':'Light mode';render();};
+// District label sized to fit inside the district's outline (bounding box, cached). English wraps to two lines when that fits better.
+const MAP_BB={};
+function mapBB(k){if(MAP_BB[k])return MAP_BB[k];let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+ for(const m of MAP_PATHS[k].d.matchAll(/(-?[\d.]+),(-?[\d.]+)/g)){const x=+m[1],yy=+m[2];if(x<x0)x0=x;if(x>x1)x1=x;if(yy<y0)y0=yy;if(yy>y1)y1=yy;}
+ return MAP_BB[k]={w:x1-x0,h:y1-y0}}
+function fitLabel(d,val,k=1){
+ const {lx,ly}=MAP_PATHS[d.k],bb=mapBB(d.k),W=Math.min(bb.w*.72,120),H=bb.h*.7;
+ const Z=12,E=8.5,V=10,wEn=str=>str.length*.56*E;
+ let en=[d.en];
+ if(wEn(d.en)>W&&d.en.includes(' ')){const words=d.en.split(' ');let best=null;
+  for(let j=1;j<words.length;j++){const a=words.slice(0,j).join(' '),b=words.slice(j).join(' ');const w=Math.max(a.length,b.length);if(!best||w<best[0])best=[w,a,b];}
+  en=[best[1],best[2]];}
+ const widest=Math.max(d.zh.length*Z,...en.map(wEn),val.length*.6*V),tall=(Z+E*en.length+V)*1.12;
+ // capped at normal on-screen size, so zooming in enlarges only the labels that were squeezed
+ const f=Math.min(1/k,W/widest,H/tall),z=Z*f,e=E*f,v=V*f,halo=z*.22;
+ let yy=ly-tall*f/2,out='';const T=(size,txt,fill,bold)=>{yy+=size*1.12;return `<text class="lbl" x="${lx}" y="${(yy-size*.18).toFixed(1)}" text-anchor="middle" font-size="${size.toFixed(2)}" ${bold?'font-weight="700"':''} fill="${fill}" style="stroke-width:${halo.toFixed(2)}px">${txt}</text>`};
+ out+=T(z,d.zh,'var(--ink)',1);en.forEach(l=>out+=T(e,l,'var(--ink)'));out+=T(v,val,'var(--gold)',1);
+ const mine=s.props.filter(p=>p.d===d.k).length+s.devs.filter(x=>x.d===d.k).length,auc=s.auctions.some(a=>a.d===d.k);
+ const bx=lx+d.zh.length*z/2+7*f,by=ly-tall*f/2+z*.5,r=6.5*f;
+ if(mine)out+=`<circle cx="${bx+r-2}" cy="${by}" r="${r}" fill="var(--gold)"/><text x="${bx+r-2}" y="${by+r*.45}" text-anchor="middle" font-size="${(r*1.3).toFixed(1)}" fill="#000" font-weight="700">${mine}</text>`;
+ if(auc)out+=`<text x="${lx-d.zh.length*z/2-9*f}" y="${by+r*.5}" text-anchor="middle" font-size="${(11*f).toFixed(1)}">🏗️</text>`;
+ return out;
+}
+// Map view: fills the page width; mouse wheel zooms around the cursor, drag pans. A.zm = zoom factor and centre (map units).
+A.zm={k:1,cx:MAP_W/2,cy:(MAP_H-36)/2};
+function mapVB(){const top=36,fw0=MAP_W,fh0=MAP_H+top;let fw=fw0,fh=fh0;
+ const r=$('#map').getBoundingClientRect?$('#map').getBoundingClientRect():null;
+ if(r&&r.width&&r.height){const a=r.width/r.height;if(a>fw0/fh0)fw=fh0*a;else fh=fw0/a;}
+ const z=A.zm,w=fw/z.k,h=fh/z.k;z.cx=clamp(z.cx,0,MAP_W);z.cy=clamp(z.cy,-top,MAP_H);
+ return [z.cx-w/2,z.cy-h/2,w,h].map(n=>+n.toFixed(2));}
+let _mapRaf=0;const redrawMap=()=>{if(!_mapRaf)_mapRaf=requestAnimationFrame(()=>{_mapRaf=0;renderMap();})};
+A.zoomMap=(f,px,py)=>{const z=A.zm,k=clamp(z.k*f,1,6);if(px!=null){z.cx=px-(px-z.cx)*z.k/k;z.cy=py-(py-z.cy)*z.k/k;}z.k=k;if(k===1){z.cx=MAP_W/2;z.cy=(MAP_H-36)/2;}redrawMap();};
+A.zoomTo=(k,cx,cy)=>{A.zm={k,cx,cy};redrawMap();};
+function mapPt(e){const r=$('#map').getBoundingClientRect(),[x,y,w,h]=mapVB();return [x+(e.clientX-r.left)*w/r.width,y+(e.clientY-r.top)*h/r.height,w/r.width];}
+function initMapZoom(){const m=$('#map');if(!m.addEventListener)return;let drag=null;
+ m.addEventListener('wheel',e=>{e.preventDefault();const [px,py]=mapPt(e);A.zoomMap(e.deltaY<0?1.25:.8,px,py);},{passive:false});
+ m.addEventListener('mousedown',e=>{drag={x:e.clientX,y:e.clientY,cx:A.zm.cx,cy:A.zm.cy,u:mapPt(e)[2]};A._dragged=false;});
+ addEventListener('mousemove',e=>{if(!drag||!e.buttons)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.abs(dx)+Math.abs(dy)>4)A._dragged=true;if(A._dragged&&A.zm.k>1){A.zm.cx=drag.cx-dx*drag.u;A.zm.cy=drag.cy-dy*drag.u;redrawMap();}});
+ addEventListener('mouseup',()=>{drag=null;});
+ addEventListener('resize',()=>{if(s)redrawMap();});}
 function renderMap(){
  // Real district outlines (data/hk-map.js, from the 2021 census boundaries). Shenzhen and Macau are off-map boxes.
  const y=s.year,top=36;
  const vals=D.map(d=>lensVal(d,y));const mn=Math.min(...vals),mx=Math.max(...vals);
- // Inset: Kowloon and Hong Kong Island magnified, since those districts are too small to label on the main map
- const URBAN=['CW','WC','EA','YT','SS','KC','WT','KT'],I={x0:286,y0:228,w:164,h:136,k:1.75};I.X=MAP_W+14;I.Y=-top+26;const IW=I.w*I.k,IH=I.h*I.k;
- $('#map').setAttribute('viewBox',`0 ${-top} ${MAP_W+IW+28} ${MAP_H+top}`);
- let g=`<rect x="0" y="${-top}" width="${MAP_W+IW+28}" height="${MAP_H+top}" fill="var(--sea)" rx="10"/>`;
+ const vb=mapVB();$('#map').setAttribute('viewBox',vb.join(' '));
+ let g='';
  const box=(k,x,yy,w,h,extra)=>{const d=SPECIAL.find(z=>z.k===k);const on=k==='SZ'?y>=1980:true;return `<g class="dist" onmouseenter="tipS('${k}',event)" onmouseleave="hideTip()"><rect x="${x}" y="${yy}" width="${w}" height="${h}" rx="6" fill="var(--offmap)" stroke="var(--neon)" stroke-opacity=".5" stroke-dasharray="4 3"/><text class="lbl" x="${x+w/2}" y="${yy+h/2+4}" text-anchor="middle" font-size="12" fill="${on?'var(--ink)':'var(--dim)'}">${d.zh} ${d.en}${k==='SZ'&&y<1980?' (closed)':''}${extra||''}</text></g>`};
  g+=box('SZ',150,-top+4,330,24)+box('MO',6,MAP_H-40,118,30,' 🎰');
  const shapes=()=>D.map((d,i)=>{const t=mx>mn?(vals[i]-mn)/(mx-mn):0;const fill=A.lens==='mine'&&!vals[i]?'var(--land0)':color(t);
   return `<path class="dist ${A.selD===d.k?'sel':''}" d="${MAP_PATHS[d.k].d}" fill="${fill}" stroke="var(--border)" stroke-width=".8" vector-effect="non-scaling-stroke" onclick="A.selectD('${d.k}')" onmousemove="tipD('${d.k}',event)" onmouseleave="hideTip()"/>`;}).join('');
- const label=(d,i,lx,ly,small)=>{const mine=s.props.filter(p=>p.d===d.k).length+s.devs.filter(x=>x.d===d.k).length;const auc=s.auctions.some(a=>a.d===d.k);
-  return `<text class="lbl" x="${lx}" y="${ly-6}" text-anchor="middle" font-size="${small?10:12}" font-weight="700" fill="var(--ink)">${d.zh}</text>
-  <text class="lbl" x="${lx}" y="${ly+(small?3.5:5)}" text-anchor="middle" font-size="${small?7.5:8.5}" fill="var(--ink)">${d.en}</text>
-  <text class="lbl" x="${lx}" y="${ly+(small?12.5:15)}" text-anchor="middle" font-size="${small?8.5:10}" font-weight="700" fill="var(--gold)">${lensLabel(vals[i])}</text>
-  ${mine?`<circle cx="${lx+(small?16:22)}" cy="${ly-10}" r="6.5" fill="var(--gold)"/><text x="${lx+(small?16:22)}" y="${ly-7}" text-anchor="middle" font-size="8.5" fill="#000" font-weight="700">${mine}</text>`:''}
-  ${auc?`<text x="${lx-(small?16:22)}" y="${ly-6}" text-anchor="middle" font-size="11">🏗️</text>`:''}`};
  g+=shapes();
- // labels drawn after all shapes so neighbours never cover them; urban districts are labelled in the inset
- D.forEach((d,i)=>{if(!URBAN.includes(d.k))g+=label(d,i,MAP_PATHS[d.k].lx,MAP_PATHS[d.k].ly,d.k==='KW');});
- g+=`<rect x="${I.x0}" y="${I.y0}" width="${I.w}" height="${I.h}" fill="none" stroke="var(--dim)" stroke-dasharray="3 3"/>`;
- g+=`<text class="lbl" x="${I.X+IW/2}" y="${I.Y-6}" text-anchor="middle" font-size="11" fill="var(--dim)">九龍及港島 Kowloon &amp; Hong Kong Island (zoomed)</text>
-  <clipPath id="insClip"><rect x="${I.X}" y="${I.Y}" width="${IW}" height="${IH}" rx="8"/></clipPath>
-  <rect x="${I.X}" y="${I.Y}" width="${IW}" height="${IH}" rx="8" fill="var(--sea)" stroke="var(--dim)"/>
-  <g clip-path="url(#insClip)"><g transform="translate(${I.X-I.x0*I.k},${I.Y-I.y0*I.k}) scale(${I.k})">${shapes()}</g></g>`;
- D.forEach((d,i)=>{if(URBAN.includes(d.k))g+=label(d,i,I.X+(MAP_PATHS[d.k].lx-I.x0)*I.k,I.Y+(MAP_PATHS[d.k].ly-I.y0)*I.k,false);});
+ // labels drawn after all shapes so neighbours never cover them; each is shrunk to fit its own district
+ D.forEach((d,i)=>{g+=fitLabel(d,lensLabel(vals[i]),A.zm.k);});
  $('#map').innerHTML=g;
- $('#lenses').innerHTML=Object.entries(LENSES).map(([k,l])=>`<button class="${A.lens===k?'on':''}" onclick="A.setLens('${k}')">${l}</button>`).join('');
- $('#legend').innerHTML=`Lens: <b>${LENSES[A.lens]}</b>, ${A.lens==='mtr'?'lines open (dim = announced)':'dark = low, bright = high'} · 🏗️ = government land sale this year · gold badge = your holdings · Click a district to trade.`;
+ $('#lenses').innerHTML=Object.entries(LENSES).map(([k,l])=>`<button class="${A.lens===k?'on':''}" onclick="A.setLens('${k}')">${l}</button>`).join('')+`<span class="grow"></span><button onclick="A.zoomTo(3.2,375,292)">🔍 Kowloon & Island</button><button onclick="A.zoomMap(1.25)">＋</button><button onclick="A.zoomMap(.8)">－</button><button onclick="A.zoomTo(1,${MAP_W/2},${(MAP_H-36)/2})">Whole map</button>`;
+ $('#legend').innerHTML=`Lens: <b>${LENSES[A.lens]}</b>, ${A.lens==='mtr'?'lines open (dim = announced)':'dark = low, bright = high'} · 🏗️ = government land sale this year · gold badge = your holdings · Click a district to trade · scroll to zoom, drag to move.`;
 }
 const tip=$('#tip');
 function hideTip(){tip.style.display='none'}
 function placeTip(e){tip.style.display='block';tip.style.left=Math.min(innerWidth-270,e.clientX+14)+'px';tip.style.top=(e.clientY+14)+'px';}
 window.tipD=(k,e)=>{const d=DM[k],y=s.year;const lines=d.mtr.map(m=>`${m[1]} ${y>=m[0]?'✅':'('+m[0]+')'}`).join('<br>');
- tip.innerHTML=`<b>${d.en} ${d.zh}</b><br><span class="dim">${d.sp}</span><br>Population ${Math.round(popOf(d,y)/1000)}k (${Math.round((popOf(d,y)/popOf(d,Math.max(1970,y-10))-1)*100)}% vs 10 yrs ago)<br>Price ${perSqft(psf(k,y))} · 500 sq ft flat ${money(500*psf(k,y))}<br>Rent yield ${pc(rentYield('flat',y,d.k))}<br><span class="cyan">${lines||'No rail yet'}</span>`;placeTip(e);};
+ tip.innerHTML=`<b>${d.en} ${d.zh}</b><br><span class="dim">${d.sp}</span><br>Includes ${AREAS[k]}<br>Population ${Math.round(popOf(d,y)/1000)}k (${Math.round((popOf(d,y)/popOf(d,Math.max(1970,y-10))-1)*100)}% vs 10 yrs ago)<br>Price ${perSqft(psf(k,y))} · 500 sq ft flat ${money(500*psf(k,y))}<br>Rent yield ${pc(rentYield('flat',y,d.k))}<br><span class="cyan">${lines||'No rail yet'}</span>`;placeTip(e);};
 window.tipS=(k,e)=>{const d=SPECIAL.find(x=>x.k===k);tip.innerHTML=`<b>${d.en} ${d.zh}</b><br>${d.sp}`;placeTip(e);};
-function renderTabs(){$('#tabs').innerHTML=['District','Empire','Business','Markets','Lifestyle','Rich List','Log'].map(t=>`<button class="${A.tab===t?'on':''}" onclick="A.setTab('${t}')">${t}</button>`).join('');}
-function renderPanel(){const f={District:pDistrict,Empire:pEmpire,Business:pBusiness,Markets:pMarkets,Lifestyle:pLifestyle,'Rich List':pRich,Log:pLog}[A.tab];$('#panel').innerHTML=f();}
+function renderTabs(){$('#tabs').innerHTML=['Map','District','Empire','Business','Markets','Lifestyle','Rich List','Log'].map(t=>`<button class="${A.tab===t?'on':''}" onclick="A.setTab('${t}')">${t}${t==='District'&&s.auctions.length?` 🏗️${s.auctions.length}`:''}</button>`).join('');}
+function renderPanel(){const onMap=A.tab==='Map';$('#mapView').style.display=onMap?'':'none';$('#panelView').style.display=onMap?'none':'';if(onMap)return;const f={District:pDistrict,Empire:pEmpire,Business:pBusiness,Markets:pMarkets,Lifestyle:pLifestyle,'Rich List':pRich,Log:pLog}[A.tab];$('#panel').innerHTML=f();}
+function landSaleLinks(close){return s.auctions.map(a=>`<a href="#" class="cyan" onclick="${close?'closeModal();':''}A.selectD('${a.d}');return false">${DM[a.d].en} (${a.sqft/1000}k sq ft)</a>`).join(', ')}
+function landSalesBar(){if(!s.auctions.length)return '';return `<div class="item" style="border-color:var(--gold)">🏗️ <b>${s.auctions.length} government land sale${s.auctions.length>1?'s':''} this year</b>, with rival developers bidding: ${landSaleLinks()}. Bidding closes when the year ends.</div>`}
 function pDistrict(){
- if(!A.selD)return `<h3>Choose a district on the map</h3><p class="dim">Each hex is one of Hong Kong's 18 districts. Its population follows the census (1971–2021) and its prices follow the territory-wide index, adjusted for population growth and MTR openings. Buy before the trains arrive.</p><p>This year's government land sales: ${s.auctions.map(a=>`<a href="#" class="cyan" onclick="A.selectD('${a.d}');return false">${DM[a.d].en}</a>`).join(', ')||'none'}</p>`;
- const d=DM[A.selD],y=s.year;let h=`<h3>${d.en}<span class="zh">${d.zh}</span></h3><div class="dim">${d.sp} · Pop ${Math.round(popOf(d,y)/1000)}k · ${perSqft(psf(d.k,y))} · Rent yield ${pc(rentYield('flat',y,d.k))}</div>`;
+ if(!A.selD)return landSalesBar()+`<h3>Choose a district on the map</h3><p class="dim">Hover over a district to see which neighbourhoods it includes (Causeway Bay is in Wan Chai, Mong Kok in Yau Tsim Mong). Hong Kong has 18 districts. Its population follows the census (1971–2021) and its prices follow the territory-wide index, adjusted for population growth and MTR openings. Buy before the trains arrive.</p>`;
+ const d=DM[A.selD],y=s.year;let h=landSalesBar()+`<h3>${d.en}<span class="zh">${d.zh}</span></h3><div>Includes ${AREAS[d.k]}</div><div class="dim">${d.sp} · Pop ${Math.round(popOf(d,y)/1000)}k · ${perSqft(psf(d.k,y))} · Rent yield ${pc(rentYield('flat',y,d.k))}</div>`;
  h+=`<div class="row"><label class="chk"><input type="checkbox" ${A.useLoan?'checked':''} onchange="A.toggleLoan()"> Use max mortgage (${Math.round(LTV(y)*100)}% LTV @ ${pc(mortRate(y))})</label>${s.flags.sars?'<span class="pill gold">SARS: 20% off</span>':''}${y>=2013&&y<2024&&ownsResidential()?'<span class="pill neg">15% stamp duty</span>':''}</div><table><tr><th>Type</th><th class="n">Price</th><th class="n">Cash needed</th><th></th></tr>`;
  for(const [t,pt] of Object.entries(PT)){if(pt.noBuy||(pt.only&&!pt.only.includes(d.k)))continue;const c=buyCost(d.k,t);h+=`<tr><td>${pt.icon} ${pt.n}${pt.face?` <span class="pill">+${pt.face} Reputation</span>`:''}</td><td class="n">${money(c.price)}</td><td class="n">${money(c.need)}</td><td><button class="sm" ${s.cash>=c.need?'':'disabled'} onclick="A.buyProp('${d.k}','${t}')">Buy</button></td></tr>`;}
  h+='</table>';
- s.auctions.filter(a=>a.d===d.k).forEach(a=>{const v=a.sqft*psf(d.k,y)*1.05;h+=`<div class="item"><div class="t">🏗️ Government land sale: ${(a.sqft/1000)}k sq ft residential site</div><div class="dim">Reserve price ${money(a.land)} + construction ${money(a.build)} over 3 years. Worth about ${money(v)} completed at today's prices. Ready ${y+3}. Bidding against <b>${a.rivals.join('</b> and <b>')}</b>: the winner pays just above the runner-up. ${A.useLoan?'Bank lends 50% of the land price.':'Paying all cash (mortgage box unticked).'}</div><div class="row">Your maximum bid: ${BIDS.map((b,i)=>{const p=a.land*(1+b);return `<button class="sm" ${s.cash>=p*(A.useLoan?.5:1)?'':'disabled'} onclick="A.bidSite('${a.id}',${i})">${b?'+'+b*100+'%':'Reserve'} (${money(p)})</button>`}).join('')}</div></div>`;});
+ s.auctions.filter(a=>a.d===d.k).forEach(a=>{const v=a.sqft*psf(d.k,y)*1.05;h+=`<div class="item"><div class="t">🏗️ Government land sale: ${(a.sqft/1000)}k sq ft residential site</div><div class="dim">Reserve price ${money(a.land)} + construction ${money(a.build)} over 3 years. Worth about ${money(v)} completed at today's prices. Ready ${y+3}. Bidding against <b>${a.rivals.join('</b> and <b>')}</b>: the winner pays just above the runner-up. ${A.useLoan?'Bank lends 50% of the land price.':'Paying all cash (mortgage box unticked).'}</div>
+ <div class="row"><label class="chk"><input type="checkbox" ${A.jv?'checked':''} onchange="A.toggleJV()"> Bid as a 50/50 joint venture with <b>${jvPartner(a)}</b>: you pay half and get half the flats and profit</label></div>
+ <div class="row">Your maximum bid: ${BIDS.map((b,i)=>{const p=a.land*(1+b);return `<button class="sm" ${s.cash>=p*(A.jv?.5:1)*(A.useLoan?.5:1)?'':'disabled'} onclick="A.bidSite('${a.id}',${i})">${b?'+'+b*100+'%':'Reserve'} (${money(p)})</button>`}).join('')}</div></div>`;});
  const mine=s.props.filter(p=>p.d===d.k);if(mine.length)h+='<h3>Your holdings here</h3>'+propTable(mine);
  return h;
 }
-function propTable(list){return '<table><tr><th>Asset</th><th class="n">Value</th><th class="n">Loan</th><th class="n">Rent/yr</th><th></th></tr>'+list.map(p=>{const v=propVal(p);return `<tr><td>${PT[p.t].icon} ${p.t==='estate'?(p.sqft/1000).toFixed(0)+'k sq ft estate':PT[p.t].n.split(' (')[0]} <span class="dim">${DM[p.d].en} '${String(p.yb).slice(2)}</span></td><td class="n ${v>=p.cost?'pos':'neg'}">${money(v)}</td><td class="n">${p.loan?money(p.loan):'—'}</td><td class="n">${money(v*rentYield(p.t,s.year,p.d))}</td><td style="white-space:nowrap">${p.t==='estate'?`<button class="sm" onclick="A.sellProp('${p.id}',.25)">Sell 25%</button> `:''}<button class="sm" onclick="A.sellProp('${p.id}')">Sell</button> ${p.loan?`<button class="sm" onclick="A.repay('${p.id}')">Repay</button>`:`<button class="sm" onclick="A.remortgage('${p.id}')" title="Borrow against it">Mortgage</button>`}</td></tr>`}).join('')+'</table>'}
+function propTable(list){return '<table><tr><th>Asset</th><th class="n">Value</th><th class="n">Loan</th><th class="n">Rent/yr</th><th></th></tr>'+[...list].sort((a,b)=>propVal(b)-propVal(a)).map(p=>{const v=propVal(p);return `<tr><td>${PT[p.t].icon} ${p.t==='estate'?(p.sqft/1000).toFixed(0)+'k sq ft estate':PT[p.t].n.split(' (')[0]} <span class="dim">${DM[p.d].en} '${String(p.yb).slice(2)}</span></td><td class="n ${v>=p.cost?'pos':'neg'}">${money(v)}</td><td class="n">${p.loan?money(p.loan):'—'}</td><td class="n">${money(v*rentYield(p.t,s.year,p.d))}</td><td style="white-space:nowrap">${p.gradual?`<span class="pill">selling 25%/yr</span> `:''}${p.t==='estate'?`<button class="sm" onclick="A.sellProp('${p.id}',.25)">Sell 25%</button> `:''}<button class="sm" onclick="A.sellProp('${p.id}')">Sell</button> ${p.loan?`<button class="sm" onclick="A.repay('${p.id}')">Repay</button>`:`<button class="sm" onclick="A.remortgage('${p.id}')" title="Borrow against it">Mortgage</button>`}</td></tr>`}).join('')+'</table>'}
 function pEmpire(){
  const p=parts();const bar=(l,v)=>`<tr><td>${l}</td><td class="n">${money(v)}</td><td style="width:40%"><div class="bar"><i style="width:${p.nw>0?clamp(v/Math.max(1,p.prop+p.dev+p.biz+p.stk+p.it+Math.max(0,p.cash))*100,0,100):0}%"></i></div></td></tr>`;
  let h=`<h3>Balance sheet<span class="zh">資產負債</span></h3><table>${bar('Cash',p.cash)}${bar('Property',p.prop)}${bar('Developments',p.dev)}${bar('Businesses',p.biz)}${bar('Hang Seng stocks',p.stk)}${bar('Cars, yachts and toys',p.it)}<tr><td>Bank loans</td><td class="n neg">${money(-p.loans)}</td><td></td></tr>${s.ipo?`<tr><td>Net assets of ${groupName()}</td><td class="n">${money(p.nw)}</td><td></td></tr><tr><td>Market cap (${hsiMood(s.year).toFixed(2)}× net assets)</td><td class="n">${money(mcap())}</td><td></td></tr><tr><th>Your ${Math.round(s.ipo.own*100)}% stake = net worth</th>`:'<tr><th>Net worth</th>'}<th class="n gold">${money(netWorth())}</th><th></th></tr></table>`;
+ const lim=creditLimit(),cr=s.credit||0,room=Math.max(0,lim-cr);
+ h+=`<h3>Financing<span class="zh">融資</span></h3><div class="item"><div class="t">🏦 Revolving credit line @ ${pc(creditRate(s.year))}</div>
+  <div class="dim">Limit ${money(lim)}: the lower of 40% of unborrowed business value plus 30% of property equity, and what half of last year's rent and business income (${money(s.lastIncome||0)}) can pay interest on. Limits shrink in downturns, and the bank calls in anything over the limit at year end.</div>
+  <div class="row">Drawn ${money(cr)} · <button class="sm" ${room>0?'':'disabled'} onclick="A.drawCredit(.25)">Draw 25% of available (+${money(room*.25)})</button><button class="sm" ${room>0?'':'disabled'} onclick="A.drawCredit(1)">Draw all (+${money(room)})</button><button class="sm" ${cr>0&&s.cash>0?'':'disabled'} onclick="A.repayCredit(1)">Repay</button></div></div>`;
+ if(s.ipo){const sv=stakeVal(),pl=s.pledge||0,proom=Math.max(0,sv*PLEDGE_LTV-pl);
+  h+=`<div class="item"><div class="t">📜 Share pledge loan @ ${pc(loanRate(s.year))}</div><div class="dim">Borrow up to ${PLEDGE_LTV*100}% of your ${Math.round(s.ipo.own*100)}% stake (worth ${money(sv)}). If the loan grows past ${PLEDGE_CALL*100}% of the stake's value after a share-price fall, the bank sells your shares to bring it back to ${PLEDGE_LTV*100}%.</div>
+  <div class="row">Pledged loan ${money(pl)} · <button class="sm" ${proom>0?'':'disabled'} onclick="A.pledgeBorrow()">Borrow (+${money(proom)})</button><button class="sm" ${pl>0&&s.cash>0?'':'disabled'} onclick="A.pledgeRepay()">Repay</button></div></div>`;}
  h+=s.props.length?'<h3>Property portfolio</h3>'+propTable(s.props):'<p class="dim">No property yet. Click a district on the map.</p>';
- if(s.devs.length)h+='<h3>Under construction</h3><table>'+s.devs.map(d=>`<tr><td>🏗️ ${(d.sqft/1000)}k sq ft, ${DM[d.d].en}</td><td>Ready ${d.done}</td><td class="n">${money(devVal(d))}</td></tr>`).join('')+'</table>';
+ if(s.devs.length)h+='<h3>Under construction</h3>'+s.devs.map(d=>{const done=3-d.left,ps=d.presold||0,full=d.sqft*psf(d.d,s.year)*1.05;
+  return `<div class="item"><div class="t">🏗️ ${(d.sqft/1000)}k sq ft, ${DM[d.d].en} <span class="pill">ready ${d.done}</span>${d.partner?` <span class="pill">50/50 with ${d.partner}</span>`:''}</div>
+  <div class="bar" style="margin:6px 0"><i style="width:${done/3*100}%"></i></div>
+  <div class="dim">Construction ${done}/3 instalments paid${d.left?` · next ${money(d.buildTotal/3)} in ${s.year+1}`:''} · cost so far ${money(d.spent)}${d.loan?` · land loan ${money(d.loan)}`:''} · worth ${money(full*(1-ps))} if completed at today's prices${ps?` · ${Math.round(ps*100)}% of flats pre-sold`:''}</div>
+  <div class="row"><button class="sm" ${ps<.75?'':'disabled'} onclick="A.presell('${d.id}')">Pre-sell 25% of flats (+${money(.25*full*.9)})</button></div></div>`}).join('');
  return h;
 }
 function pBusiness(){
@@ -616,7 +728,14 @@ function pBusiness(){
   const m=bizMult(k,y);const out=b.dyn?'tracks the stock market':m>2?'▲▲▲ boom':m>1.2?'▲▲ strong':m>.8?'▲ steady':m>.4?'▼ weak':'▼▼ dying';
   let req='';if(!own&&b.req){const nwReq=b.req.nw*CPI(y);if(face()<b.req.face||netWorth()<nwReq)req=`Needs Reputation ${b.req.face}${nwReq?' and net worth '+money(nwReq):''}`;}
   h+=`<div class="item"><div class="t">${b.icon} ${b.n} <span class="zh" style="color:var(--neon)">${b.zh}</span> <span class="pill">${out}</span></div>`;
-  if(own){h+=`<div class="dim">Capital ${money(own.cReal*CPI(y))} · Last year ${money(own.last)} · Value ${money(bizVal(k))}${b.fac&&s.flags.reloc?' · 🇨🇳 Shenzhen plants':''}</div><div class="row">${b.special?'':`<button class="sm" onclick="A.expandBiz('${k}')" ${s.cash>=own.cReal*CPI(y)&&avail?'':'disabled'}>Double it (${money(own.cReal*CPI(y))})</button>`}<button class="sm" onclick="A.sellBiz('${k}')">Sell for ${money(bizVal(k))}</button></div>`;}
+  if(own){const cap=own.cReal*CPI(y),lv=own.lvl||0;
+   const inv=own.inv||0,ern=own.earned||0,val=bizVal(k),gain=val+ern-inv;
+   h+=`<div class="dim">Capital ${money(cap)} · Last year's profit ${money(own.last)} · Value ${money(val)} · Upgrades ${lv}/3${lv?` (+${lv*15}% profit)`:''}${b.fac&&s.flags.reloc?' · 🇨🇳 Shenzhen plants':''}</div>
+   <div class="row"><span>Since ${own.since}: put in <b>${money(inv)}</b> · profits taken out <b>${money(ern)}</b> · value now <b>${money(val)}</b> · lifetime ${gain>=0?'gain':'loss'} <b class="${gain>=0?'pos':'neg'}">${money(Math.abs(gain))}</b>${inv>0?` (${(val+ern)/inv>=10?Math.round((val+ern)/inv):((val+ern)/inv).toFixed(1)}× your money)`:''}${own.est?' · <i>estimated: this save started before tracking</i>':''}</span></div>
+   <div class="dim" style="font-size:11px">Profits are before interest and tax. Put in = start-up cost plus growth and upgrades, at the prices you paid.</div>
+   ${b.special?'':`<div class="row">Grow: ${[.25,.5,1].map(f=>`<button class="sm" onclick="A.growBiz('${k}',${f})" ${s.cash>=cap*f&&avail?'':'disabled'}>+${f*100}% (${money(cap*f)})</button>`).join('')}</div>`}
+   <div class="row">${lv<3?`<button class="sm" onclick="A.upgradeBiz('${k}')" ${s.cash>=upgCost(own)?'':'disabled'}>Upgrade: ${UPG[lv]} (${money(upgCost(own))}, +15% profit)</button>`:'<span class="dim">Fully upgraded</span>'}<button class="sm" onclick="A.sellBiz('${k}')">Sell for ${money(bizVal(k)-(own.loan||0))}${own.loan?' after repaying its loan':''}</button></div>
+   <div class="row">🏦 Business loan ${money(own.loan||0)} @ ${pc(loanRate(y))} · <button class="sm" ${bizVal(k)*BIZ_LTV>(own.loan||0)?'':'disabled'} onclick="A.bizBorrow('${k}')">Borrow against it (+${money(Math.max(0,bizVal(k)*BIZ_LTV-(own.loan||0)))})</button><button class="sm" ${own.loan&&s.cash>0?'':'disabled'} onclick="A.bizRepay('${k}')">Repay</button></div>`;}
   else{const c=b.cost*CPI(y);h+=`<div class="row"><button class="sm" ${s.cash>=c&&!req?'':'disabled'} onclick="A.buyBiz('${k}')">Start for ${money(c)}</button><span class="dim">${req}</span></div>`;}
   h+='</div>';}
  if(!s.biz.casino&&y<2002)h+=`<p class="dim">🎰 Macau casino concessions open in 2002. You'll need net worth and Reputation.</p>`;
@@ -634,10 +753,20 @@ function pMarkets(){
 }
 function pLifestyle(){
  const y=s.year;let h=`<h3>Lifestyle & Reputation<span class="zh">名望</span>: ${face()}</h3><p class="dim">Reputation unlocks bank licences, Miss Hong Kong romances, Macau concessions and honours. It comes from wealth, toys, mansions, marriage, children and philanthropy.</p>`;
+ const real=netWorth()/CPI(y),rp=[['💰 Wealth (grows as your net worth grows)',real>1e5?6*(Math.log10(real)-5):0],['🚗 Cars, yachts, horses and plates (while owned)',s.items.reduce((a,i)=>a+IT[i.k].face,0)],
+  ['🏯 Mansions on the Peak or Mid-Levels (+15 each)',s.props.reduce((a,p)=>a+(PT[p.t].face||0),0)],['💍 Spouse (Miss Hong Kong +8)',s.spouses.reduce((a,sp)=>a+sp.face,0)],['👶 Children (+1 each)',s.kids],
+  ['🎗️ Donations, events, listing and background',s.faceBase],['👑 Knighthood or Grand Bauhinia Medal (+10, at Reputation 60)',s.title?10:0]];
+ h+=`<table>${rp.map(([l,v])=>`<tr><td>${l}</td><td class="n ${v<0?'neg':''}">${Math.round(v)}</td></tr>`).join('')}</table>`;
  h+='<table>'+Object.entries(IT).filter(([k,i])=>y>=i.from).map(([k,i])=>`<tr><td>${i.icon} ${i.n} <span class="pill">+${i.face}</span></td><td class="n">${money(i.cost*CPI(y))}</td><td><button class="sm" ${s.cash>=i.cost*CPI(y)?'':'disabled'} onclick="A.buyItem('${k}')">Buy</button></td></tr>`).join('')+'</table>';
  if(s.items.length)h+='<h3>Your toys</h3><table>'+s.items.map(i=>`<tr><td>${IT[i.k].icon} ${IT[i.k].n}</td><td class="n">${money(i.val)}</td><td><button class="sm" onclick="A.sellItem('${i.id}')">Sell</button></td></tr>`).join('')+'</table>';
  h+=`<h3>Family<span class="zh">家庭</span></h3>`;
- h+=s.spouses.length?'<table>'+s.spouses.map((sp,i)=>`<tr><td>💍 ${sp.name}</td><td class="dim">${sp.src}</td><td><button class="sm" onclick="A.divorce(${i})">Divorce (−${money(Math.max(0,netWorth())*.2)})</button></td></tr>`).join('')+'</table>':'<p class="dim">Single. Each year the Miss Hong Kong pageant (from 1973) gives you a chance. More Reputation means better odds.</p>';
+ const pg=pageantNow();
+ if(pg){const P=Math.round(courtOdds()*100),g=courtGift(),blocked=married()&&s.flags.mono;
+  h+=`<div class="item"><div class="t">👑 Miss Hong Kong ${pg.y}: ${pg.name}<span class="zh">香港小姐</span></div><div class="dim">Crowned on TVB this year. One move per pageant.</div><div class="row">`+
+  (blocked?`<button class="sm" ${s.cash>=g+netWorth()*.2?'':'disabled'} onclick="A.court(1)">Divorce, then court her (${money(g)} gifts + 20% of net worth, ${P}%)</button>`
+   :`<button class="sm" ${s.cash>=g?'':'disabled'} onclick="A.court(0)">Court her (${money(g)} gifts, ${P}% chance)</button>`)+
+  `<button class="sm" onclick="A.gala()">Attend the gala (+1 Reputation)</button></div></div>`;}
+ h+=s.spouses.length?'<table>'+s.spouses.map((sp,i)=>`<tr><td>💍 ${sp.name}</td><td class="dim">${sp.src}</td><td><button class="sm" onclick="A.divorce(${i})">Divorce (−${money(Math.max(0,netWorth())*.2)})</button></td></tr>`).join('')+'</table>':'<p class="dim">Single. Each year from 1973 the new Miss Hong Kong appears here. More Reputation means better odds.</p>';
  h+=`<div class="dim">Children: ${s.kids}${s.flags.mono?' · Monogamy law in force since 1971':''}${s.generation>1?` · Generation ${s.generation} of the ${s.founder.split(' ')[0]} dynasty`:''}</div>`;
  h+=`<div class="row"><button class="sm" ${s.kids&&s.age>=55?'':'disabled'} onclick="A.handover()">Hand the empire to an heir</button><span class="dim">From age 55 with at least one child. Death becomes possible from 55; with no children, the fortune goes to charity and the game ends.</span></div>`;
  h+=`<h3>Philanthropy<span class="zh">慈善</span></h3><div class="row"><button class="sm" onclick="A.donate(0)">Scholarship ${money(1e5*CPI(y))} (+3)</button><button class="sm" onclick="A.donate(1)">Hospital wing ${money(1e6*CPI(y))} (+10)</button><button class="sm" onclick="A.donate(2)">University tower ${money(1e7*CPI(y))} (+25)</button></div>`;
@@ -646,7 +775,7 @@ function pLifestyle(){
 function pRich(){return `<h3>Pearl Rich List ${s.year}<span class="zh">富豪榜</span></h3>${richTable(richList())}<h3>Your net worth (log scale)</h3>${s.hist.length>1?spark(s.hist.map(x=>[x.y,Math.max(1,x.nw)])):'<p class="dim">Play a few years.</p>'}<p class="dim">Rivals are fictional. Their fortunes follow the property index, the Hang Seng, shipping and textiles.</p>`}
 function pLog(){return '<h3>Chronicle<span class="zh">大事記</span></h3>'+(s.log.map(l=>`<div><span class="cyan">${l.y}</span> ${l.t}</div>`).join('')||'<p class="dim">Nothing yet.</p>')}
 function renderTicker(){const ev=EVENTS.filter(e=>e.y===s.year).map(e=>`${e.zh} ${e.t}`);const d=[...D].sort((a,b)=>(popOf(b,s.year)/popOf(b,Math.max(1970,s.year-5)))-(popOf(a,s.year)/popOf(a,Math.max(1970,s.year-5))))[0];
- $('#tickerText').textContent=`${s.year}  ✦  ${ev.join('  ✦  ')||'Business as usual in the Fragrant Harbour'}  ✦  Fastest-growing district: ${d.en} ${d.zh}  ✦  HSI ${HSI[s.year].toLocaleString()}  ✦  Prime ${PRIME(s.year).toFixed(2)}%  ✦  Population ${(totalPop(s.year)/1e6).toFixed(2)}M  ✦  ${s.auctions.length} government land sales this year`;}
+ $('#tickerText').textContent=`${s.year}  ✦  ${ev.join('  ✦  ')||'Business as usual in the Fragrant Harbour'}  ✦  Fastest-growing district: ${d.en} ${d.zh}  ✦  HSI ${HSI[s.year].toLocaleString()}  ✦  Prime ${PRIME(s.year).toFixed(2)}%  ✦  Population ${(totalPop(s.year)/1e6).toFixed(2)}M  ✦  ${s.auctions.length} government land sales this year${s.pageant&&s.pageant.y===s.year?`  ✦  Miss Hong Kong ${s.year}: ${s.pageant.name}`:''}`;}
 
 /* ================= START / HELP ================= */
 A.newGame=()=>{
@@ -656,7 +785,7 @@ A.newGame=()=>{
  <button onclick="A.start('chiu')">🚢 <b>Chiu Chow trader's son</b>: HK$200K cash, +25% trading profits</button>
  <button onclick="A.start('street')">🥢 <b>Kowloon street kid</b>: HK$30K cash, lucky, no reputation</button></div>`);
 };
-A.start=o=>{const n=(($('#nm')||{}).value||'Wong Kar-fai').trim();s=freshState(n,o);genAuctions();s.hist.push({y:1970,nw:netWorth()});log(`${n} sets out to conquer Hong Kong.`);A.selD=null;A.tab='District';save();closeModal();render();};
+A.start=o=>{const n=(($('#nm')||{}).value||'Wong Kar-fai').trim();s=freshState(n,o);genAuctions();s.hist.push({y:1970,nw:netWorth()});log(`${n} sets out to conquer Hong Kong.`);A.selD=null;A.tab='Map';save();closeModal();render();};
 A.help=()=>showModal(`<h2>Sources & notes</h2><p>The idea comes from Karpathy's Civ-style map of US public data. Every series below was downloaded from an official or published source unless marked <b>estimated</b>:</p><ul>
 <li><b>District populations — official C&SD counts</b>: 1981 Census District Board Tabulations (domestic-household persons, scaled to the 5,109,812 territory total; Mong Kok + Yau Ma Tei merged into Yau Tsim Mong; Tsuen Wan split into Tsuen Wan / Kwai Tsing by their 1991 ratio, since Kwai Tsing became a district in 1985); 1991, 1996, 2001 (2001 Census Table 1); 2011, 2016, 2021 (2021 Census Main Results Table 3.20). <b>1971 is estimated</b>: districts did not exist yet, so it is back-projected and scaled to the official 1971 total of 3,936,630.</li>
 <li><b>Property prices</b>: Rating & Valuation Department private domestic price index (all classes, 1999=100), official 1980–2025; <b>1970–79 estimated</b>. Absolute prices per sq ft and gross rental yields use RVD class B (40–69.9 m²) average prices and rents for Hong Kong Island, Kowloon and the New Territories, 1986–2025. Before 1986 prices follow the index and yields use the 1986 levels (estimated). The premium of each district within its region is a game estimate driven by census population growth and MTR openings.</li><li><b>Hang Seng Index</b>: year-end closes 1970–2025 (Hang Seng Indexes Co. via Wikipedia, checked against Yahoo Finance from 1986).</li><li><b>Interest rates</b>: HKMA best lending rate (HSBC), annual averages 1971–2025; 1970 assumed 8%. Mortgage rate in game = BLR + 0.5% before 2000, BLR − 1.75% after.</li><li><b>Listing your group</b>: share price = net assets × market mood, where mood = Hang Seng close ÷ its 5-year average (real index data), capped at 0.5–1.6, × 0.85. The formula itself is a game rule.</li><li><b>US$ display</b>: values converted at each year's HK$ per US$ rate; 7.80 from 1984 (linked rate since October 1983); <b>1970–83 approximate</b>.</li><li><b>Inflation</b>: C&SD Composite CPI from 1981, chained to CPI(A) 1975–80; <b>1970–74 estimated</b>. Used for business costs, wages and prices of goods.</li>
@@ -664,6 +793,7 @@ A.help=()=>showModal(`<h2>Sources & notes</h2><p>The idea comes from Karpathy's 
 <li>Events are real history. People, tycoons and Miss Hong Kong winners in the game are fictional.</li></ul>
 <p class="dim">Not yet from data: business profitability by era, LTV caps and stamp duties (rule summaries), typhoon timing, and district premiums within each region.</p><div class="choices"><button onclick="closeModal()">Close</button></div>`);
 window.A=A;window.closeModal=closeModal;
+initMapZoom();
 try{if(localStorage.getItem('hktheme')==='light'){document.body.classList.add('light');$('#themeBtn').textContent='Dark mode';}}catch(e){}
 s=load();if(s&&s.auctions&&s.auctions.some(a=>!a.rivals))genAuctions();  // saves from before rival bidding
 if(s&&!s.over){render();}else{s=s||freshState('Wong Kar-fai','chiu');render();A.newGame();}
