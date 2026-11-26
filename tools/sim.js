@@ -8,7 +8,7 @@ const el = () => ({ innerHTML: '', textContent: '', style: {}, value: '', disabl
 const els = {};
 const ctx = {
   console, setTimeout: () => 0, clearTimeout: () => 0, innerWidth: 1000,
-  localStorage: { getItem: () => null, setItem: () => {}, clear: () => {} },
+  localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {}, clear: () => {} },
   document: { querySelector: q => els[q] || (els[q] = { ...el(), setAttribute() {} }), querySelectorAll: () => [],
               body: { classList: { contains: () => false, add() {}, toggle: () => false } } },
 };

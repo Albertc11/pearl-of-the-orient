@@ -84,6 +84,7 @@ label.chk{font-size:12px;color:var(--dim);display:flex;gap:5px;align-items:cente
   <div id="ticker"><span id="tickerText"></span></div>
   <button onclick="A.help()">Sources</button>
   <button onclick="A.toggleTheme()" id="themeBtn">Light mode</button>
+  <button onclick="A.games()">Games</button>
   <button onclick="A.newGame()">New game</button>
   <button class="primary" id="endBtn" onclick="A.advance()">End Year ▶</button>
 </footer>
@@ -218,11 +219,19 @@ function freshState(name,origin){
  if(origin==='street'){st.cash=30e3;st.luck=.12;st.faceBase=-3;}
  return st;
 }
-function save(){try{localStorage.setItem('hktycoon',JSON.stringify(s))}catch(e){}}
-function load(){try{const j=localStorage.getItem('hktycoon');if(j){const g=JSON.parse(j);
+// Each game is saved under its own key (hkt_g_<id>) with a small summary (hkt_m_<id>) for the Games list.
+const SK='hkt_g_',MK='hkt_m_',newId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+function save(){try{if(!s.id)s.id=newId();localStorage.setItem(SK+s.id,JSON.stringify(s));
+ localStorage.setItem(MK+s.id,JSON.stringify({n:s.label||s.name,o:s.origin,y:s.year,nw:netWorth(),over:s.over||'',t:Date.now()}));
+ localStorage.setItem('hkt_cur',s.id);localStorage.removeItem('hktycoon');}  // old single-slot save, now moved
+ catch(e){if(!save.warned&&typeof alert==='function'){save.warned=1;alert('Could not save the game: browser storage is full. Delete old games from the Games menu.');}}}
+function savedGames(){const r=[];try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith(MK))r.push({id:k.slice(MK.length),...JSON.parse(localStorage.getItem(k))});}}catch(e){}return r.sort((a,b)=>b.t-a.t)}
+function load(id){try{const j=id?localStorage.getItem(SK+id):(localStorage.getItem(SK+localStorage.getItem('hkt_cur'))||localStorage.getItem('hktycoon'));if(j)return migrate(JSON.parse(j))}catch(e){}return null}
+function migrate(g){{
  // saves from before lifetime tracking: estimate what was put in from today's capital at the founding year's prices
  for(const b of Object.values(g.biz||{}))if(b.inv==null){b.inv=b.cReal*CPI(b.since);b.earned=0;b.est=1;}
- return g}}catch(e){}return null}
+ if(!g.pco)g.pco={inv:(g.props||[]).reduce((a,p)=>a+p.cost-p.loan,0)+(g.devs||[]).reduce((a,d)=>a+d.spent-d.loan,0),out:0,est:1};
+ return g}}
 function log(t){s.log.unshift({y:s.year,t});if(s.log.length>300)s.log.pop();}
 
 /* ================= VALUATION ================= */
@@ -259,10 +268,18 @@ function parts(){
  const dev=s.devs.reduce((a,d)=>a+devVal(d),0), biz=Object.keys(s.biz).reduce((a,k)=>a+bizVal(k),0), stk=s.units*HSI[s.year], it=itemsVal();
  return {cash:s.cash,prop,dev,loans,biz,stk,it,nw:s.cash+prop+dev-loans+biz+stk+it};
 }
+// Property company vs personal holdings. Developments, businesses, the credit line and company properties belong to the group;
+// personal properties, Hang Seng stocks, toys, cash and the share-pledge loan are the founder's own. Only the group is listed.
+const isCo=p=>p.own!=='me', propName=()=>s.name.split(' ')[0]+' Land';
+function coNav(){return s.props.filter(isCo).reduce((a,p)=>a+propVal(p)-p.loan,0)+s.devs.reduce((a,d)=>a+devVal(d)-d.loan,0)
+ +Object.keys(s.biz).reduce((a,k)=>a+bizVal(k)-(s.biz[k].loan||0),0)-(s.credit||0)}
+function personalNW(){return s.cash+s.props.filter(p=>!isCo(p)).reduce((a,p)=>a+propVal(p)-p.loan,0)+s.units*HSI[s.year]+itemsVal()-(s.pledge||0)}
+const coPropEquity=()=>s.props.filter(isCo).reduce((a,p)=>a+propVal(p)-p.loan,0)+s.devs.reduce((a,d)=>a+devVal(d)-d.loan,0);
+const pco=(f,v)=>{if(!s.pco)s.pco={inv:0,out:0};s.pco[f]+=v;};  // lifetime cash into / out of the property company
 // Listed group: priced at net assets x market mood (Hang Seng vs its own 5-year average, from real index data)
 function hsiMood(y){let a=0;for(let i=y-4;i<=y;i++)a+=HSI[i];return clamp(HSI[y]/(a/5),.5,1.6)*.85}
-function mcap(){return Math.max(0,parts().nw)*hsiMood(s.year)}
-const netWorth=()=>s.ipo?s.ipo.own*mcap():parts().nw;
+function mcap(){return Math.max(0,coNav())*hsiMood(s.year)}
+const netWorth=()=>s.ipo?s.ipo.own*mcap()+personalNW():parts().nw;
 function groupName(){return s.name.split(' ')[0]+' Holdings'}
 function face(){
  let f=s.faceBase;s.items.forEach(i=>f+=IT[i.k].face);s.props.forEach(p=>f+=PT[p.t].face||0);s.spouses.forEach(sp=>f+=sp.face);f+=s.kids;
@@ -273,12 +290,15 @@ function married(){return s.spouses.length>0}
 
 /* ================= ACTIONS ================= */
 const A={};
-A.selD=null;A.tab='Map';A.lens='price';A.useLoan=true;A.ccy='HKD';
+A.selD=null;A.tab='Map';A.lens='price';A.useLoan=true;A.buyFor='co';A.ccy='HKD';
 A.toggleCcy=()=>{A.ccy=A.ccy==='USD'?'HKD':'USD';render();};
 A.selectD=k=>{if(A._dragged){A._dragged=false;return;}A.selD=k;A.tab='District';render();};
 A.setTab=t=>{A.tab=t;render();};
 A.setLens=l=>{A.lens=l;render();};
 A.toggleLoan=()=>{A.useLoan=!A.useLoan;render();};
+A.setBuyFor=o=>{A.buyFor=o;render();};
+// before listing, properties move freely between you and the company; after, it would be a related-party deal
+A.moveProp=id=>{const p=s.props.find(x=>x.id===id);if(!p||s.ipo)return;const eq=propVal(p)-p.loan;if(isCo(p)){p.own='me';pco('out',eq);}else{p.own='co';pco('inv',eq);}log(`Moved ${PT[p.t].n} in ${DM[p.d].en} ${isCo(p)?'into '+propName():'into your own name'}.`);render();};
 A.drawCredit=f=>{const room=Math.max(0,creditLimit()-(s.credit||0)),amt=room*f;if(amt<=0)return toast('No credit available');s.credit=(s.credit||0)+amt;s.cash+=amt;log(`Drew ${money(amt)} on the credit line.`);render();};
 A.repayCredit=f=>{const amt=Math.min(Math.max(0,s.cash),(s.credit||0)*f);s.credit-=amt;s.cash-=amt;render();};
 A.bizBorrow=k=>{const b=s.biz[k],room=Math.max(0,bizVal(k)*BIZ_LTV-(b.loan||0));if(room<=0)return;b.loan=(b.loan||0)+room;s.cash+=room;log(`Borrowed ${money(room)} against your ${BZ[k].n}.`);render();};
@@ -291,12 +311,12 @@ function buyCost(k,t){
  let duty=.03;if(s.year>=2013&&s.year<2024&&ownsResidential())duty=.15;
  const loan=A.useLoan?price*LTV(s.year):0;return {price,duty:price*duty,loan,need:price-loan+price*duty};
 }
-A.buyProp=(k,t)=>{const c=buyCost(k,t);if(s.cash<c.need)return toast('Not enough cash');s.cash-=c.need;s.props.push({id:uid(),d:k,t,sqft:PT[t].sqft,cost:c.price,loan:c.loan,yb:s.year});log(`Bought ${PT[t].n} in ${DM[k].en} for ${money(c.price)}${c.loan?` (mortgage ${money(c.loan)})`:''}`);render();};
+A.buyProp=(k,t)=>{const c=buyCost(k,t);if(s.cash<c.need)return toast('Not enough cash');const own=A.buyFor==='me'?'me':'co';s.cash-=c.need;if(own==='co')pco('inv',c.need);s.props.push({id:uid(),d:k,t,sqft:PT[t].sqft,cost:c.price,loan:c.loan,yb:s.year,own});log(`Bought ${PT[t].n} in ${DM[k].en} ${own==='co'?'for '+propName():'personally'} for ${money(c.price)}${c.loan?` (mortgage ${money(c.loan)})`:''}`);render();};
 function ssd(p){if(s.year>=2010&&s.year<2024&&s.year-p.yb<=2)return .15;return 0}
-function sellFrac(p,frac){const v=propVal(p)*frac,l=p.loan*frac,fee=v*(.01+ssd(p));s.cash+=v-l-fee;log(`Sold ${frac<1?Math.round(frac*100)+'% of ':''}${PT[p.t].n} in ${DM[p.d].en} for ${money(v)}${ssd(p)?' (paid Special Stamp Duty)':''}`);if(frac>=1)s.props=s.props.filter(x=>x!==p);else{p.sqft*=1-frac;p.loan-=l;p.cost*=1-frac;}return v}
+function sellFrac(p,frac){const v=propVal(p)*frac,l=p.loan*frac,fee=v*(.01+ssd(p));s.cash+=v-l-fee;if(isCo(p))pco('out',v-l-fee);log(`Sold ${frac<1?Math.round(frac*100)+'% of ':''}${PT[p.t].n} in ${DM[p.d].en} for ${money(v)}${ssd(p)?' (paid Special Stamp Duty)':''}`);if(frac>=1)s.props=s.props.filter(x=>x!==p);else{p.sqft*=1-frac;p.loan-=l;p.cost*=1-frac;}return v}
 A.sellProp=(id,frac=1)=>{const p=s.props.find(x=>x.id===id);if(!p)return;sellFrac(p,frac);render();};
-A.repay=id=>{const p=s.props.find(x=>x.id===id);const r=Math.min(Math.max(0,s.cash),p.loan);p.loan-=r;s.cash-=r;render();};
-A.remortgage=id=>{const p=s.props.find(x=>x.id===id);const max=propVal(p)*LTV(s.year);if(p.loan<max){s.cash+=max-p.loan;log(`Remortgaged ${DM[p.d].en} ${PT[p.t].n}: +${money(max-p.loan)}`);p.loan=max;}render();};
+A.repay=id=>{const p=s.props.find(x=>x.id===id);const r=Math.min(Math.max(0,s.cash),p.loan);p.loan-=r;s.cash-=r;if(isCo(p))pco('inv',r);render();};
+A.remortgage=id=>{const p=s.props.find(x=>x.id===id);const max=propVal(p)*LTV(s.year);if(p.loan<max){s.cash+=max-p.loan;if(isCo(p))pco('out',max-p.loan);log(`Remortgaged ${DM[p.d].en} ${PT[p.t].n}: +${money(max-p.loan)}`);p.loan=max;}render();};
 function genAuctions(){
  s.auctions=[];const n=2+Math.floor(Math.random()*2);const w=D.map(d=>Math.max(5,(popOf(d,s.year+10)-popOf(d,s.year))/1000)+10);
  for(let i=0;i<n;i++){let r=Math.random()*w.reduce((a,b)=>a+b,0),j=0;while(r>w[j]){r-=w[j];j++;}const d=D[j];if(s.auctions.some(a=>a.d===d.k))continue;
@@ -316,7 +336,7 @@ A.bidSite=(id,i)=>{const a=s.auctions.find(x=>x.id===id);const bid=a.land*(1+BID
  // joint venture: a partner group pays half and takes half of the flats, costs and profit
  const sh=A.jv?.5:1,partner=A.jv?jvPartner(a):null,price=full*sh,sq=a.sqft*sh,bld=a.build*sh;const L=A.useLoan?price*.5:0;
  if(s.cash<price-L){s.auctions.push(a);return toast('Not enough cash');}
- s.cash-=price-L;s.devs.push({id:uid(),d:a.d,sqft:sq,y:s.year,done:s.year+3,spent:price,buildTotal:bld,left:3,loan:L,presold:0,partner});
+ s.cash-=price-L;pco('inv',price-L);s.devs.push({id:uid(),d:a.d,sqft:sq,y:s.year,done:s.year+3,spent:price,buildTotal:bld,left:3,loan:L,presold:0,partner});
  log(`Won government land sale: ${(a.sqft/1000)}k sq ft site in ${DM[a.d].en} for ${money(full)}, beating ${a.rivals.join(' and ')}${partner?`, in a 50/50 joint venture with ${partner}`:''}`);render();
  const y=s.year,val=sq*psf(a.d,y)*1.05,inst=bld/3,rate=mortRate(y);
  showModal(`<div class="yr">${y} · LAND SALE WON 投地成功</div><h2>${(a.sqft/1000)}k sq ft site in ${DM[a.d].en}</h2>
@@ -334,7 +354,7 @@ A.devChoice=(id,c)=>{const p=s.props.find(x=>x.id===id);if(!p)return;let msg;
  else msg='Keeping the flats to rent out. You can still sell from the Empire tab.';
  const el=document.getElementById('cmp-'+id);if(el)el.innerHTML='🏗️ '+msg;render();};
 // Pre-sales: sell a quarter of the flats before completion at 10% below today's completed value
-A.presell=id=>{const d=s.devs.find(x=>x.id===id);if(!d||(d.presold||0)>=.75)return;const c=.25*d.sqft*psf(d.d,s.year)*1.05*.9;s.cash+=c;d.presold=(d.presold||0)+.25;
+A.presell=id=>{const d=s.devs.find(x=>x.id===id);if(!d||(d.presold||0)>=.75)return;const c=.25*d.sqft*psf(d.d,s.year)*1.05*.9;s.cash+=c;pco('out',c);d.presold=(d.presold||0)+.25;
  log(`Pre-sold 25% of the flats at your ${DM[d.d].en} site for ${money(c)}.`);render();};
 A.buyBiz=k=>{const c=BZ[k].cost*CPI(s.year);if(s.cash<c)return toast('Not enough cash');s.cash-=c;s.biz[k]={cReal:BZ[k].cost,since:s.year,last:0,inv:c,earned:0};log(`Founded ${BZ[k].n} with ${money(c)}`);render();};
 // Upgrades raise the profit rate by 15% each (max 3); growing adds capital in steps
@@ -348,7 +368,7 @@ A.sellBiz=k=>{const v=bizVal(k),b=s.biz[k];s.cash+=v-(b.loan||0);delete s.biz[k]
 function factoryCap(){return ['garment','toys','elec'].reduce((a,k)=>a+(s.biz[k]?s.biz[k].cReal*CPI(s.year):0),0)}
 A.relocate=()=>{const c=factoryCap()*.3;if(s.cash<c)return toast('Not enough cash');s.cash-=c;s.flags.reloc=1;log(`Relocated factories to Shenzhen (${money(c)})`);render();};
 const IPO_NAV=20e6,IPO_FACE=15;
-function ipoOk(){return !s.ipo&&parts().nw>=IPO_NAV*CPI(s.year)&&face()>=IPO_FACE}
+function ipoOk(){return !s.ipo&&coNav()>=IPO_NAV*CPI(s.year)&&face()>=IPO_FACE}
 A.ipo=()=>{if(!ipoOk())return;const c=.25*mcap();s.cash+=c;s.ipo={own:.75,y:s.year};s.faceBase+=5;log(`${groupName()} lists on the stock exchange. Sold 25% to the public for ${money(c)}.`);render();};
 A.placement=()=>{if(!s.ipo||s.ipo.own<.45)return;const c=.1*mcap();s.cash+=c;s.ipo.own-=.1;log(`Placed 10% of ${groupName()} with investors for ${money(c)}.`);render();};
 function privCost(){return s.ipo?(1-s.ipo.own)*mcap()*1.3:0}
@@ -500,22 +520,24 @@ function simulate(){
  s.props.filter(p=>p.gradual>0).forEach(p=>{const v=sellFrac(p,1/p.gradual);p.gradual--;notes.push(`🏘️ Sold a tranche of flats at your ${DM[p.d].en} estate for ${money(v)}${p.gradual?` (${p.gradual} left)`:' (all sold)'}.`);});
  const y0=s.year,preP=new Map(s.props.map(p=>[p.id,propVal(p,y0)])),preB={},preU=s.units,preD=s.devs.reduce((a,d)=>a+devVal(d),0);for(const k in s.biz)preB[k]=bizVal(k,y0);
  const y=s.year+1;s.year=y;s.age++;const luck=s.luck||0;const L=[];
- let rent=0;s.props.forEach(p=>rent+=propVal(p,y)*rentYield(p.t,y,p.d));
+ let rent=0,coRent=0;s.props.forEach(p=>{const r=propVal(p,y)*rentYield(p.t,y,p.d);rent+=r;if(isCo(p))coRent+=r;});
  let bizP=0;for(const k in s.biz){const b=s.biz[k];let m=bizMult(k,y)*(s.shock[k]??1);if(s.flags.bribed&&y<1977)m*=1.15;if(s.origin==='chiu'&&k==='trading')m*=1.25;if(k==='horse')continue;
   const pr=b.cReal*CPI(y)*BZ[k].roi*m*upgMult(b)*(.75+Math.random()*.5+luck);b.last=pr;b.earned=(b.earned||0)+pr;bizP+=pr;L.push([BZ[k].icon+' '+BZ[k].n,pr]);}
  const div=s.units*HSI[y]*.035;
  let horse=0;s.items.forEach(i=>{if(i.k==='horse')horse+=i.cost*(Math.random()*.5-.12)*(y>=1978?1.4:1)});
  const sal=Object.keys(s.biz).length?0:6000*CPI(y)*(1+.05*(s.age-22));
- const rate=mortRate(y);let interest=0;s.props.forEach(p=>interest+=p.loan*rate);s.devs.forEach(d=>interest+=d.loan*rate);
+ const rate=mortRate(y);let interest=0,coInt=0;s.props.forEach(p=>{interest+=p.loan*rate;if(isCo(p))coInt+=p.loan*rate;});s.devs.forEach(d=>{interest+=d.loan*rate;coInt+=d.loan*rate;});
  const living=(5e3+s.spouses.reduce((a,sp)=>a+(sp.cost||4e3),0)+2e3*s.kids)*CPI(y);
  let upkeep=0;s.items.forEach(i=>upkeep+=i.val*IT[i.k].up);
- let build=0;s.devs.forEach(d=>{if(d.left>0){const p=d.buildTotal/3;build+=p;d.left--;d.spent+=p;}});
+ let build=0;s.devs.forEach(d=>{if(d.left>0){const p=d.buildTotal/3;build+=p;d.left--;d.spent+=p;}});pco('inv',build);pco('out',coRent-coInt);
  const othInt=otherInterest(y);s.lastIncome=rent+bizP;
  const tax=Math.max(0,rent+bizP-interest-othInt)*.15;const extra=s.extra;s.extra=0;
- const divOut=s.ipo?(1-s.ipo.own)*Math.max(0,rent+bizP-interest-othInt-tax)*.4:0;
+ // outside shareholders are paid only from the listed group's profit, never from your personal rent
+ const coProfit=coRent+bizP-coInt-(s.credit||0)*creditRate(y)-bizDebt()*loanRate(y);
+ const divOut=s.ipo?(1-s.ipo.own)*Math.max(0,coProfit*.85)*.4:0;
  const net=rent+bizP+div+horse+sal-interest-othInt-living-upkeep-build-tax-extra-divOut;s.cash+=net;
  s.completed=[];
- const done=s.devs.filter(d=>y>=d.done);done.forEach(d=>{const keep=1-(d.presold||0),id=uid();s.props.push({id,d:d.d,t:'estate',sqft:d.sqft*keep,cost:d.spent*keep,loan:d.loan,yb:y});s.completed.push(id);
+ const done=s.devs.filter(d=>y>=d.done);done.forEach(d=>{const keep=1-(d.presold||0),id=uid();s.props.push({id,d:d.d,t:'estate',sqft:d.sqft*keep,cost:d.spent*keep,loan:d.loan,yb:y,own:'co'});s.completed.push(id);
   notes.push(`🏗️ Your ${(d.sqft/1000)}k sq ft development in ${DM[d.d].en} is complete${keep<1?` (${Math.round((1-keep)*100)}% of flats were pre-sold and handed to buyers)`:''}, worth ${money(d.sqft*keep*psf(d.d,y)*1.05)}.`);});
  s.devs=s.devs.filter(d=>y<d.done);
  let dep=0;s.items.forEach(i=>{const d=i.val*IT[i.k].dep;dep+=d;i.val-=d;});
@@ -544,8 +566,8 @@ function liquidate(){
  while(s.cash<0&&s.items.length){const i=s.items.pop();s.cash+=i.val*.7;notes.push(`• ${IT[i.k].n} sold`);}
  for(const k of Object.keys(s.biz)){if(s.cash>=0)break;const v=bizVal(k)*.7;s.cash+=v-(s.biz[k].loan||0);delete s.biz[k];notes.push(`• ${BZ[k].n} fire-sold for ${money(v)}`);}
  s.props.sort((a,b)=>(propVal(b)-b.loan)-(propVal(a)-a.loan));
- while(s.cash<0&&s.props.length){const p=s.props.shift();const v=propVal(p)*.9-p.loan;s.cash+=v;notes.push(`• Bank repossessed ${PT[p.t].n} in ${DM[p.d].en} (equity ${money(v)})`);}
- while(s.cash<0&&s.devs.length){const d=s.devs.shift();s.cash+=d.spent*.5-d.loan;notes.push(`• Unfinished site in ${DM[d.d].en} sold at a loss`);}
+ while(s.cash<0&&s.props.length){const p=s.props.shift();const v=propVal(p)*.9-p.loan;s.cash+=v;if(isCo(p))pco('out',v);notes.push(`• Bank repossessed ${PT[p.t].n} in ${DM[p.d].en} (equity ${money(v)})`);}
+ while(s.cash<0&&s.devs.length){const d=s.devs.shift();s.cash+=d.spent*.5-d.loan;pco('out',d.spent*.5-d.loan);notes.push(`• Unfinished site in ${DM[d.d].en} sold at a loss`);}
  if(s.cash<-20e3*CPI(s.year)){s.over='bankrupt';}else if(s.cash<0)notes.push('• You borrow from relatives to cover the gap.');
 }
 function showReport(r){
@@ -690,7 +712,7 @@ function landSalesBar(){if(!s.auctions.length)return '';return `<div class="item
 function pDistrict(){
  if(!A.selD)return landSalesBar()+`<h3>Choose a district on the map</h3><p class="dim">Hover over a district to see which neighbourhoods it includes (Causeway Bay is in Wan Chai, Mong Kok in Yau Tsim Mong). Hong Kong has 18 districts. Its population follows the census (1971–2021) and its prices follow the territory-wide index, adjusted for population growth and MTR openings. Buy before the trains arrive.</p>`;
  const d=DM[A.selD],y=s.year;let h=landSalesBar()+`<h3>${d.en}<span class="zh">${d.zh}</span></h3><div>Includes ${AREAS[d.k]}</div><div class="dim">${d.sp} · Pop ${Math.round(popOf(d,y)/1000)}k · ${perSqft(psf(d.k,y))} · Rent yield ${pc(rentYield('flat',y,d.k))}</div>`;
- h+=`<div class="row"><label class="chk"><input type="checkbox" ${A.useLoan?'checked':''} onchange="A.toggleLoan()"> Use max mortgage (${Math.round(LTV(y)*100)}% LTV @ ${pc(mortRate(y))})</label>${s.flags.sars?'<span class="pill gold">SARS: 20% off</span>':''}${y>=2013&&y<2024&&ownsResidential()?'<span class="pill neg">15% stamp duty</span>':''}</div><table><tr><th>Type</th><th class="n">Price</th><th class="n">Cash needed</th><th></th></tr>`;
+ h+=`<div class="row"><label class="chk"><input type="checkbox" ${A.useLoan?'checked':''} onchange="A.toggleLoan()"> Use max mortgage (${Math.round(LTV(y)*100)}% LTV @ ${pc(mortRate(y))})</label><span class="dim">Buy for:</span><button class="sm ${A.buyFor!=='me'?'primary':''}" onclick="A.setBuyFor('co')">🏢 ${propName()}</button><button class="sm ${A.buyFor==='me'?'primary':''}" onclick="A.setBuyFor('me')">👤 Personally</button>${s.flags.sars?'<span class="pill gold">SARS: 20% off</span>':''}${y>=2013&&y<2024&&ownsResidential()?'<span class="pill neg">15% stamp duty</span>':''}</div><table><tr><th>Type</th><th class="n">Price</th><th class="n">Cash needed</th><th></th></tr>`;
  for(const [t,pt] of Object.entries(PT)){if(pt.noBuy||(pt.only&&!pt.only.includes(d.k)))continue;const c=buyCost(d.k,t);h+=`<tr><td>${pt.icon} ${pt.n}${pt.face?` <span class="pill">+${pt.face} Reputation</span>`:''}</td><td class="n">${money(c.price)}</td><td class="n">${money(c.need)}</td><td><button class="sm" ${s.cash>=c.need?'':'disabled'} onclick="A.buyProp('${d.k}','${t}')">Buy</button></td></tr>`;}
  h+='</table>';
  s.auctions.filter(a=>a.d===d.k).forEach(a=>{const v=a.sqft*psf(d.k,y)*1.05;h+=`<div class="item"><div class="t">🏗️ Government land sale: ${(a.sqft/1000)}k sq ft residential site</div><div class="dim">Reserve price ${money(a.land)} + construction ${money(a.build)} over 3 years. Worth about ${money(v)} completed at today's prices. Ready ${y+3}. Bidding against <b>${a.rivals.join('</b> and <b>')}</b>: the winner pays just above the runner-up. ${A.useLoan?'Bank lends 50% of the land price.':'Paying all cash (mortgage box unticked).'}</div>
@@ -699,10 +721,10 @@ function pDistrict(){
  const mine=s.props.filter(p=>p.d===d.k);if(mine.length)h+='<h3>Your holdings here</h3>'+propTable(mine);
  return h;
 }
-function propTable(list){return '<table><tr><th>Asset</th><th class="n">Value</th><th class="n">Loan</th><th class="n">Rent/yr</th><th></th></tr>'+[...list].sort((a,b)=>propVal(b)-propVal(a)).map(p=>{const v=propVal(p);return `<tr><td>${PT[p.t].icon} ${p.t==='estate'?(p.sqft/1000).toFixed(0)+'k sq ft estate':PT[p.t].n.split(' (')[0]} <span class="dim">${DM[p.d].en} '${String(p.yb).slice(2)}</span></td><td class="n ${v>=p.cost?'pos':'neg'}">${money(v)}</td><td class="n">${p.loan?money(p.loan):'—'}</td><td class="n">${money(v*rentYield(p.t,s.year,p.d))}</td><td style="white-space:nowrap">${p.gradual?`<span class="pill">selling 25%/yr</span> `:''}${p.t==='estate'?`<button class="sm" onclick="A.sellProp('${p.id}',.25)">Sell 25%</button> `:''}<button class="sm" onclick="A.sellProp('${p.id}')">Sell</button> ${p.loan?`<button class="sm" onclick="A.repay('${p.id}')">Repay</button>`:`<button class="sm" onclick="A.remortgage('${p.id}')" title="Borrow against it">Mortgage</button>`}</td></tr>`}).join('')+'</table>'}
+function propTable(list){return '<table><tr><th>Asset</th><th class="n">Value</th><th class="n">Loan</th><th class="n">Rent/yr</th><th></th></tr>'+[...list].sort((a,b)=>propVal(b)-propVal(a)).map(p=>{const v=propVal(p);return `<tr><td>${PT[p.t].icon} ${p.t==='estate'?(p.sqft/1000).toFixed(0)+'k sq ft estate':PT[p.t].n.split(' (')[0]} <span class="dim">${DM[p.d].en} '${String(p.yb).slice(2)}</span></td><td class="n ${v>=p.cost?'pos':'neg'}">${money(v)}</td><td class="n">${p.loan?money(p.loan):'—'}</td><td class="n">${money(v*rentYield(p.t,s.year,p.d))}</td><td style="white-space:nowrap">${p.gradual?`<span class="pill">selling 25%/yr</span> `:''}${p.t==='estate'?`<button class="sm" onclick="A.sellProp('${p.id}',.25)">Sell 25%</button> `:''}<button class="sm" onclick="A.sellProp('${p.id}')">Sell</button> ${s.ipo?'':`<button class="sm" onclick="A.moveProp('${p.id}')" title="Free before listing">${isCo(p)?'→ Personal':'→ Company'}</button> `}${p.loan?`<button class="sm" onclick="A.repay('${p.id}')">Repay</button>`:`<button class="sm" onclick="A.remortgage('${p.id}')" title="Borrow against it">Mortgage</button>`}</td></tr>`}).join('')+'</table>'}
 function pEmpire(){
  const p=parts();const bar=(l,v)=>`<tr><td>${l}</td><td class="n">${money(v)}</td><td style="width:40%"><div class="bar"><i style="width:${p.nw>0?clamp(v/Math.max(1,p.prop+p.dev+p.biz+p.stk+p.it+Math.max(0,p.cash))*100,0,100):0}%"></i></div></td></tr>`;
- let h=`<h3>Balance sheet<span class="zh">資產負債</span></h3><table>${bar('Cash',p.cash)}${bar('Property',p.prop)}${bar('Developments',p.dev)}${bar('Businesses',p.biz)}${bar('Hang Seng stocks',p.stk)}${bar('Cars, yachts and toys',p.it)}<tr><td>Bank loans</td><td class="n neg">${money(-p.loans)}</td><td></td></tr>${s.ipo?`<tr><td>Net assets of ${groupName()}</td><td class="n">${money(p.nw)}</td><td></td></tr><tr><td>Market cap (${hsiMood(s.year).toFixed(2)}× net assets)</td><td class="n">${money(mcap())}</td><td></td></tr><tr><th>Your ${Math.round(s.ipo.own*100)}% stake = net worth</th>`:'<tr><th>Net worth</th>'}<th class="n gold">${money(netWorth())}</th><th></th></tr></table>`;
+ let h=`<h3>Balance sheet<span class="zh">資產負債</span></h3><table>${bar('Cash',p.cash)}${bar('Property',p.prop)}${bar('Developments',p.dev)}${bar('Businesses',p.biz)}${bar('Hang Seng stocks',p.stk)}${bar('Cars, yachts and toys',p.it)}<tr><td>Bank loans</td><td class="n neg">${money(-p.loans)}</td><td></td></tr>${s.ipo?`<tr><td>Net assets of ${groupName()} (company only)</td><td class="n">${money(coNav())}</td><td></td></tr><tr><td>Market cap (${hsiMood(s.year).toFixed(2)}× net assets)</td><td class="n">${money(mcap())}</td><td></td></tr><tr><td>Your ${Math.round(s.ipo.own*100)}% stake</td><td class="n">${money(stakeVal())}</td><td></td></tr><tr><td>Personal: cash, own property, stocks, toys, less share-pledge loan</td><td class="n">${money(personalNW())}</td><td></td></tr><tr><th>Net worth</th>`:'<tr><th>Net worth</th>'}<th class="n gold">${money(netWorth())}</th><th></th></tr></table>`;
  const lim=creditLimit(),cr=s.credit||0,room=Math.max(0,lim-cr);
  h+=`<h3>Financing<span class="zh">融資</span></h3><div class="item"><div class="t">🏦 Revolving credit line @ ${pc(creditRate(s.year))}</div>
   <div class="dim">Limit ${money(lim)}: the lower of 40% of unborrowed business value plus 30% of property equity, and what half of last year's rent and business income (${money(s.lastIncome||0)}) can pay interest on. Limits shrink in downturns, and the bank calls in anything over the limit at year end.</div>
@@ -710,7 +732,11 @@ function pEmpire(){
  if(s.ipo){const sv=stakeVal(),pl=s.pledge||0,proom=Math.max(0,sv*PLEDGE_LTV-pl);
   h+=`<div class="item"><div class="t">📜 Share pledge loan @ ${pc(loanRate(s.year))}</div><div class="dim">Borrow up to ${PLEDGE_LTV*100}% of your ${Math.round(s.ipo.own*100)}% stake (worth ${money(sv)}). If the loan grows past ${PLEDGE_CALL*100}% of the stake's value after a share-price fall, the bank sells your shares to bring it back to ${PLEDGE_LTV*100}%.</div>
   <div class="row">Pledged loan ${money(pl)} · <button class="sm" ${proom>0?'':'disabled'} onclick="A.pledgeBorrow()">Borrow (+${money(proom)})</button><button class="sm" ${pl>0&&s.cash>0?'':'disabled'} onclick="A.pledgeRepay()">Repay</button></div></div>`;}
- h+=s.props.length?'<h3>Property portfolio</h3>'+propTable(s.props):'<p class="dim">No property yet. Click a district on the map.</p>';
+ const coP=s.props.filter(isCo),meP=s.props.filter(p=>!isCo(p));
+ if(!s.props.length)h+='<p class="dim">No property yet. Click a district on the map.</p>';
+ if(coP.length)h+=`<h3>🏢 ${propName()} (company)</h3>`+propTable(coP);
+ if(meP.length)h+=`<h3>👤 Personal property</h3><p class="dim">Held in your own name: never part of a listing, and its rent is all yours.</p>`+propTable(meP);
+ if(s.props.length)h+=`<p class="dim">${s.ipo?'Your group is listed, so properties can no longer move between you and the company.':'Before listing you can move properties between the company and yourself for free.'}</p>`;
  if(s.devs.length)h+='<h3>Under construction</h3>'+s.devs.map(d=>{const done=3-d.left,ps=d.presold||0,full=d.sqft*psf(d.d,s.year)*1.05;
   return `<div class="item"><div class="t">🏗️ ${(d.sqft/1000)}k sq ft, ${DM[d.d].en} <span class="pill">ready ${d.done}</span>${d.partner?` <span class="pill">50/50 with ${d.partner}</span>`:''}</div>
   <div class="bar" style="margin:6px 0"><i style="width:${done/3*100}%"></i></div>
@@ -722,8 +748,14 @@ function pBusiness(){
  const y=s.year;let h=`<h3>Businesses<span class="zh">生意</span></h3><p class="dim">Profit = capital × return × era conditions. Industries rise and fall with real history: factories fade in the '80s, trading booms after 1978, retail rides mainland tourism, Macau rides everything.</p>`;
  const mood=hsiMood(y);
  if(s.ipo)h+=`<div class="item"><div class="t">📈 ${groupName()} <span class="pill">listed ${s.ipo.y}</span></div><div class="dim">Market cap ${money(mcap())} (${mood.toFixed(2)}× net assets) · you own ${Math.round(s.ipo.own*100)}% · outside shareholders get 40% of profits × their share as dividends</div><div class="row"><button class="sm" ${s.ipo.own>=.45?'':'disabled'} onclick="A.placement()">Sell 10% more shares (+${money(.1*mcap())})</button><button class="sm" ${s.cash>=privCost()?'':'disabled'} onclick="A.privatise()">Take private (${money(privCost())}, 30% premium)</button></div></div>`;
- else h+=`<div class="item"><div class="t">📈 List ${groupName()} on the stock exchange</div><div class="dim">Sell 25% of your whole group to the public for about ${money(.25*mcap())}. Shares are priced at ${mood.toFixed(2)}× net assets: high when the Hang Seng is above its 5-year average, low after crashes. Once listed, your net worth is your stake × market cap. Needs net assets of ${money(IPO_NAV*CPI(y))} and Reputation ${IPO_FACE}.</div><div class="row"><button class="sm" ${ipoOk()?'':'disabled'} onclick="A.ipo()">List now</button></div></div>`;
+ else h+=`<div class="item"><div class="t">📈 List ${groupName()} on the stock exchange</div><div class="dim">Sell 25% of the company (${propName()}'s properties and developments plus your businesses) to the public for about ${money(.25*mcap())}. Personal property, cash and stocks are not included. Shares are priced at ${mood.toFixed(2)}× net assets: high when the Hang Seng is above its 5-year average, low after crashes. Once listed, your net worth is your stake × market cap plus your personal assets. Needs company net assets of ${money(IPO_NAV*CPI(y))} and Reputation ${IPO_FACE}.</div><div class="row"><button class="sm" ${ipoOk()?'':'disabled'} onclick="A.ipo()">List now</button></div></div>`;
  if(factoryCap()>0&&y>=1980&&!s.flags.reloc)h+=`<div class="item">🏭 <b>Relocate factories to Shenzhen</b>: ${money(factoryCap()*.3)}. Keeps manufacturing profitable after HK wages rise. <button class="sm" onclick="A.relocate()">Relocate</button></div>`;
+ {const coP=s.props.filter(isCo),val=coP.reduce((a,p)=>a+propVal(p),0),debt=coP.reduce((a,p)=>a+p.loan,0)+s.devs.reduce((a,d)=>a+d.loan,0),
+  rent=coP.reduce((a,p)=>a+propVal(p)*rentYield(p.t,s.year,p.d),0),eq=coPropEquity(),P=s.pco||{inv:0,out:0},gain=eq+P.out-P.inv;
+  h+=`<div class="item"><div class="t">🏢 ${propName()} <span class="zh" style="color:var(--neon)">地產</span> <span class="pill">property company</span></div>
+  <div class="dim">${coP.length} properties worth ${money(val)} · ${s.devs.length} under construction (${money(s.devs.reduce((a,d)=>a+devVal(d),0))}) · mortgages and land loans ${money(debt)} · rent ${money(rent)}/yr. Buy for the company from the District tab; land sale developments always go here.${s.ipo?' This is the core of the listed group.':''}</div>
+  ${P.inv||P.out?`<div class="row"><span>Lifetime: put in <b>${money(P.inv)}</b> · taken out <b>${money(P.out)}</b> (rent after interest, sales, pre-sales, remortgages) · equity now <b>${money(eq)}</b> · ${gain>=0?'gain':'loss'} <b class="${gain>=0?'pos':'neg'}">${money(Math.abs(gain))}</b>${P.est?' · <i>estimated: this save started before tracking</i>':''}</span></div>`:''}
+  <div class="row"><button class="sm" onclick="A.setTab('Map')">Find property on the map</button><button class="sm" onclick="A.setTab('Empire')">Manage holdings</button></div></div>`;}
  for(const [k,b] of Object.entries(BZ)){const own=s.biz[k];const avail=y>=b.from&&(!b.to||y<b.to);if(!own&&(!avail||b.special))continue;
   const m=bizMult(k,y);const out=b.dyn?'tracks the stock market':m>2?'▲▲▲ boom':m>1.2?'▲▲ strong':m>.8?'▲ steady':m>.4?'▼ weak':'▼▼ dying';
   let req='';if(!own&&b.req){const nwReq=b.req.nw*CPI(y);if(face()<b.req.face||netWorth()<nwReq)req=`Needs Reputation ${b.req.face}${nwReq?' and net worth '+money(nwReq):''}`;}
@@ -792,10 +824,30 @@ A.help=()=>showModal(`<h2>Sources & notes</h2><p>The idea comes from Karpathy's 
 <li>MTR/KCR opening years; LTV caps (HKMA 70% from 1991, tighter 2009–2024); SSD/DSD stamp duties</li>
 <li>Events are real history. People, tycoons and Miss Hong Kong winners in the game are fictional.</li></ul>
 <p class="dim">Not yet from data: business profitability by era, LTV caps and stamp duties (rule summaries), typhoon timing, and district premiums within each region.</p><div class="choices"><button onclick="closeModal()">Close</button></div>`);
+/* ===== GAMES MENU: several saved games, copies, file backup ===== */
+const ORIGIN={shanghai:'🧵',chiu:'🚢',street:'🥢'};
+function useGame(g){s=g;if(s.auctions&&s.auctions.some(a=>!a.rivals))genAuctions();  // saves from before rival bidding
+ A.selD=null;A.tab='Map';save();closeModal();render();}
+A.games=()=>{save();const L=savedGames();let h=`<h2>Saved games</h2><p class="dim">Games save automatically after every action, in this browser only. Export a file to back one up or move it to another device.</p><table style="width:100%">`;
+ for(const g of L){const cur=g.id===s.id;h+=`<tr><td>${ORIGIN[g.o]||''} <b>${g.n}</b>${cur?' <span class="pos">· playing</span>':''}<br><span class="dim">${g.y}${g.over?' · '+(g.over==='bankrupt'?'bankrupt':'finished'):''} · ${money(g.nw)} · saved ${new Date(g.t).toLocaleString()}</span></td>
+ <td style="text-align:right;white-space:nowrap">${cur?'':`<button onclick="A.loadGame('${g.id}')">Load</button> <button onclick="A.delGame('${g.id}')">Delete</button>`}</td></tr>`;}
+ h+=`</table><div class="choices"><button onclick="A.newGame()">➕ New game (this one stays saved)</button><button onclick="A.copyGame()">📑 Save a copy of this game, to try another path</button>
+ <button onclick="A.exportGame()">💾 Export this game to a file</button><button onclick="$('#impFile').click()">📂 Import a game from a file</button><button onclick="closeModal()">Close</button></div>
+ <input type="file" id="impFile" accept=".json,application/json" style="display:none" onchange="A.importGame(this.files[0])">`;showModal(h);};
+A.loadGame=id=>{save();const g=load(id);if(!g)return alert('That save could not be read.');useGame(g);};
+A.delGame=id=>{const g=savedGames().find(x=>x.id===id);if(!g||!confirm(`Delete ${g.n} (${g.y})? This cannot be undone.`))return;
+ localStorage.removeItem(SK+id);localStorage.removeItem(MK+id);A.games();};
+A.copyGame=()=>{const c=JSON.parse(JSON.stringify(s));c.id=newId();c.label=(s.label||s.name)+' (copy)';const keep=s;s=c;save();s=keep;save();A.games();};
+A.exportGame=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(s)],{type:'application/json'}));
+ a.download=`pearl-${s.name.replace(/[^\w-]+/g,'_')}-${s.year}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
+A.importGame=f=>{if(!f)return;f.text().then(t=>{let g;try{g=JSON.parse(t)}catch(e){}
+ if(!g||typeof g.year!=='number'||!Array.isArray(g.props))return alert('That file is not a Pearl of the Orient save.');
+ save();g=migrate(g);g.id=newId();g.label=(g.label||g.name)+' (imported)';useGame(g);});};
 window.A=A;window.closeModal=closeModal;
 initMapZoom();
 try{if(localStorage.getItem('hktheme')==='light'){document.body.classList.add('light');$('#themeBtn').textContent='Dark mode';}}catch(e){}
 s=load();if(s&&s.auctions&&s.auctions.some(a=>!a.rivals))genAuctions();  // saves from before rival bidding
+if(s)save();  // moves an old single-slot save into the Games list
 if(s&&!s.over){render();}else{s=s||freshState('Wong Kar-fai','chiu');render();A.newGame();}
 </script>
 </body>
