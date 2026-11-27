@@ -54,13 +54,14 @@ function tycoon(){
   aggressive();
 }
 function runGame(strategy){
-  localStorage.clear(); A.start('chiu'); A.useLoan=true; const path=[]; __ev=[];
+  localStorage.clear(); A.start(START); A.useLoan=true; const path=[]; __ev=[];
   for(let i=0;i<60&&!s.over;i++){ if(s.year>=2025){A.advance();break;} strategy(); playYear();
     if(s.pendingDeath){ if(s.kids){A.chooseHeir(0);__ev.push(s.year+'heir');} else successionModal('death'); }
     if(s.year%10==0) path.push(s.year+':'+money(netWorth())); }
   return {nw:netWorth(),over:s.over,path:path.join(' '),props:s.props.length,casino:!!s.biz.casino,ipo:__ev.join(',')+(s.ipo?' own='+Math.round(s.ipo.own*100)+'%':'')};
 }
 `, ctx);
+vm.runInContext('var START='+JSON.stringify(process.argv[4]||'chiu'),ctx);
 const runs = +process.argv[2] || 5;
 const only = process.argv[3];  // optional: run one strategy, e.g. node tools/sim.js 5 tycoon
 for (const name of ['cautious', 'aggressive', 'tycoon'].filter(n => !only || n === only)) {
