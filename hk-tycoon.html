@@ -193,7 +193,16 @@ const CPI=y=>interp(CPI_KF,y), PRIME=y=>interp(PRIME_KF,y);
 function regPsf(r,y){return REG_PSF[r][y]!=null?REG_PSF[r][y]:REG_PSF[r][1986]*PPI[y]/PPI[1986]}
 function regYld(r,y){return REG_YLD[r][Math.max(1986,Math.min(2025,y))]}
 function LTV(y){return y<1991?.9:y<G(2009)?.7:y<G(2024)?.5:.7}
-function mortRate(y){return Math.max(2,PRIME(y)+(y<2000?.5:-1.75))/100}
+/* ===== DIFFICULTY: Easy is the original game; Normal and Tycoon add the risks below (game rules) ===== */
+const DIFF={easy:'Easy',normal:'Normal',tycoon:'Tycoon'};
+const HARD=()=>s.diff==='normal'||s.diff==='tycoon', TY=()=>s.diff==='tycoon';
+const spike=y=>HARD()&&y===G(1998)?4:0;  // 1998 interbank squeeze, one year
+function repAdj(){if(!HARD())return 0;const f=face();return f<0?2:f>=40?-.5:0}  // bad names pay more, good names less
+const rateAdj=y=>spike(y)+repAdj();
+// share of gross rent you keep: 15% goes on rates, management and repairs; vacancy is 5%, more when prices fall
+function vacancy(y){if(!HARD())return 0;const f=Math.max(0,1-PPI[y]/(PPI[y-1]||PPI[y]));return Math.min(.4,.05+2*f)}
+const rentF=y=>HARD()?.85-vacancy(y):1;
+function mortRate(y){return Math.max(2,PRIME(y)+(y<2000?.5:-1.75)+rateAdj(y))/100}
 // HK$ per US$, annual average. Linked rate 7.80 from 17 Oct 1983, so 1984+ uses 7.80. 1970-83 approximate.
 const FX={1970:6.06,1971:5.98,1972:5.64,1973:5.15,1974:4.91,1975:4.94,1976:4.90,1977:4.66,1978:4.68,1979:5.00,1980:4.98,1981:5.59,1982:6.07,1983:7.27};
 function ccy(){const usd=typeof A!=='undefined'&&A.ccy==='USD';return usd?['US$',FX[s?s.year:1970]||7.8]:['HK$',1]}
@@ -268,7 +277,7 @@ function freshState(name,origin){
 // Each game is saved under its own key (hkt_g_<id>) with a small summary (hkt_m_<id>) for the Games list.
 const SK='hkt_g_',MK='hkt_m_',newId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,5);
 function save(){try{if(!s.id)s.id=newId();localStorage.setItem(SK+s.id,JSON.stringify(s));
- localStorage.setItem(MK+s.id,JSON.stringify({n:s.label||s.name,sh:s.tl?1:0,o:s.origin,y:s.year,nw:netWorth(),over:s.over||'',t:Date.now()}));
+ localStorage.setItem(MK+s.id,JSON.stringify({n:s.label||s.name,sh:s.tl?1:0,d:s.diff||'easy',o:s.origin,y:s.year,nw:netWorth(),over:s.over||'',t:Date.now()}));
  localStorage.setItem('hkt_cur',s.id);localStorage.removeItem('hktycoon');}  // old single-slot save, now moved
  catch(e){if(!save.warned&&typeof alert==='function'){save.warned=1;alert('Could not save the game: browser storage is full. Delete old games from the Games menu.');}}}
 function savedGames(){const r=[];try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith(MK))r.push({id:k.slice(MK.length),...JSON.parse(localStorage.getItem(k))});}}catch(e){}return r.sort((a,b)=>b.t-a.t)}
@@ -293,7 +302,7 @@ function itemsVal(){return s.items.reduce((a,i)=>a+i.val,0)}
 const CREDIT_SPREAD=1.5,LOAN_SPREAD=1,BIZ_LTV=.4,PLEDGE_LTV=.4,PLEDGE_CALL=.5;
 const bizDebt=()=>Object.values(s.biz).reduce((a,b)=>a+(b.loan||0),0);
 function otherDebt(){return (s.credit||0)+(s.pledge||0)+bizDebt()}
-const creditRate=y=>(PRIME(y)+CREDIT_SPREAD)/100, loanRate=y=>(PRIME(y)+LOAN_SPREAD)/100;
+const creditRate=y=>(PRIME(y)+CREDIT_SPREAD+rateAdj(y))/100, loanRate=y=>(PRIME(y)+LOAN_SPREAD+rateAdj(y))/100;
 function otherInterest(y){return (s.credit||0)*creditRate(y)+((s.pledge||0)+bizDebt())*loanRate(y)}
 // Credit limit: 40% of unborrowed business value + 30% of property equity, and the interest on everything
 // you owe must stay under half of last year's rent + business income.
@@ -304,6 +313,11 @@ function creditLimit(){const y=s.year;
 const stakeVal=()=>s.ipo?s.ipo.own*mcap():0;
 // Year-end checks after prices move: banks cut limits and call in loans that are no longer covered
 function marginCalls(){
+ // Normal/Tycoon: a loan more than 20 points (Tycoon 10) above today's lending limit, as a share of the asset's new value, is cut back to that limit
+ if(HARD()){const lv=LTV(s.year),trig=Math.min(1,lv+(TY()?.1:.2)),dtrig=TY()?.6:.7;let tot=0;
+  s.props.forEach(p=>{const v=propVal(p);if(p.loan>v*trig){const x=p.loan-v*lv;p.loan-=x;s.cash-=x;tot+=x;if(isCo(p))pco('inv',x);}});
+  s.devs.forEach(d=>{const v=devVal(d);if(d.loan>v*dtrig){const x=d.loan-v*.5;d.loan-=x;s.cash-=x;tot+=x;pco('inv',x);}});
+  if(tot)notes.push(`<span class="neg">🏦 Property values fell below your loans. The banks called in ${money(tot)} of mortgages and land loans.</span>`);}
  const lim=creditLimit();if((s.credit||0)>lim+1){const x=s.credit-lim;s.credit=lim;s.cash-=x;notes.push(`<span class="neg">🏦 The bank cut your credit line: you had to repay ${money(x)}.</span>`);}
  for(const k in s.biz){const b=s.biz[k],cap=bizVal(k)*.6;if((b.loan||0)>cap){const x=b.loan-cap;b.loan=cap;s.cash-=x;notes.push(`<span class="neg">🏦 Your ${BZ[k].n} lost value: the bank called in ${money(x)} of its loan.</span>`);}}
  if(s.ipo&&(s.pledge||0)>stakeVal()*PLEDGE_CALL){const m=mcap(),x=s.pledge-stakeVal()*PLEDGE_LTV,cut=Math.min(s.ipo.own,x/Math.max(1,m));s.ipo.own-=cut;s.pledge-=x;
@@ -353,11 +367,11 @@ A.pledgeBorrow=()=>{const room=Math.max(0,stakeVal()*PLEDGE_LTV-(s.pledge||0));i
 A.pledgeRepay=()=>{const amt=Math.min(Math.max(0,s.cash),s.pledge||0);s.pledge-=amt;s.cash-=amt;render();};
 function ownsResidential(){return s.props.some(p=>['flat','mansion','estate','building'].includes(p.t))}
 function buyCost(k,t){
- const p={d:k,t,sqft:PT[t].sqft};let price=propVal(p);if(s.flags.sars)price*=.8;
+ const p={d:k,t,sqft:PT[t].sqft};let price=propVal(p);if(s.flags.sars)price*=.8;if(HARD())price*=1+.04*((s.bought||{})[k]||0);  // each extra buy in a district this year costs 4% more
  let duty=.03;if(s.year>=G(2013)&&s.year<G(2024)&&ownsResidential())duty=.15;
  const loan=A.useLoan?price*LTV(s.year):0;return {price,duty:price*duty,loan,need:price-loan+price*duty};
 }
-A.buyProp=(k,t)=>{const c=buyCost(k,t);if(s.cash<c.need)return toast('Not enough cash');const own=A.buyFor==='me'?'me':'co';s.cash-=c.need;if(own==='co')pco('inv',c.need);s.props.push({id:uid(),d:k,t,sqft:PT[t].sqft,cost:c.price,loan:c.loan,yb:s.year,own});log(`Bought ${PT[t].n} in ${DM[k].en} ${own==='co'?'for '+propName():'personally'} for ${money(c.price)}${c.loan?` (mortgage ${money(c.loan)})`:''}`);render();};
+A.buyProp=(k,t)=>{const c=buyCost(k,t);if(s.cash<c.need)return toast('Not enough cash');const own=A.buyFor==='me'?'me':'co';s.cash-=c.need;if(own==='co')pco('inv',c.need);s.bought=s.bought||{};s.bought[k]=(s.bought[k]||0)+1;s.props.push({id:uid(),d:k,t,sqft:PT[t].sqft,cost:c.price,loan:c.loan,yb:s.year,own});log(`Bought ${PT[t].n} in ${DM[k].en} ${own==='co'?'for '+propName():'personally'} for ${money(c.price)}${c.loan?` (mortgage ${money(c.loan)})`:''}`);render();};
 function ssd(p){if(s.year>=G(2010)&&s.year<G(2024)&&s.year-p.yb<=2)return .15;return 0}
 function sellFrac(p,frac){const v=propVal(p)*frac,l=p.loan*frac,fee=v*(.01+ssd(p));s.cash+=v-l-fee;if(isCo(p))pco('out',v-l-fee);log(`Sold ${frac<1?Math.round(frac*100)+'% of ':''}${PT[p.t].n} in ${DM[p.d].en} for ${money(v)}${ssd(p)?' (paid Special Stamp Duty)':''}`);if(frac>=1)s.props=s.props.filter(x=>x!==p);else{p.sqft*=1-frac;p.loan-=l;p.cost*=1-frac;}return v}
 A.sellProp=(id,frac=1)=>{const p=s.props.find(x=>x.id===id);if(!p)return;sellFrac(p,frac);render();};
@@ -375,10 +389,12 @@ const BIDS=[0,.15,.3,.5];
 A.jv=false;A.toggleJV=()=>{A.jv=!A.jv;render();};
 const jvPartner=a=>RIVALS.map(r=>r.co).find(c=>!a.rivals.includes(c));
 // English auction: the highest bidder wins and pays just above the runner-up's ceiling (never below the reserve)
+const landBarred=()=>HARD()&&face()<0, rivalCap=a=>a.rivalMax*(HARD()&&face()>=40?.95:1);
 A.bidSite=(id,i)=>{const a=s.auctions.find(x=>x.id===id);const bid=a.land*(1+BIDS[i]);
- s.auctions=s.auctions.filter(x=>x!==a);
- if(bid<a.rivalMax){const win=a.rivals[0];log(`Outbid for the ${(a.sqft/1000)}k sq ft site in ${DM[a.d].en}: ${win} paid about ${money(a.rivalMax)}.`);toast(`${win} outbid you at about ${money(a.rivalMax)}`);return render();}
- const full=Math.max(a.land,Math.min(bid,a.rivalMax*1.01));
+ if(landBarred())return toast('The Lands Department will not accept bids from someone with your reputation');
+ s.auctions=s.auctions.filter(x=>x!==a);const rivalMax=rivalCap(a);
+ if(bid<rivalMax){const win=a.rivals[0];log(`Outbid for the ${(a.sqft/1000)}k sq ft site in ${DM[a.d].en}: ${win} paid about ${money(rivalMax)}.`);toast(`${win} outbid you at about ${money(rivalMax)}`);return render();}
+ const full=Math.max(a.land,Math.min(bid,rivalMax*1.01));
  // joint venture: a partner group pays half and takes half of the flats, costs and profit
  const sh=A.jv?.5:1,partner=A.jv?jvPartner(a):null,price=full*sh,sq=a.sqft*sh,bld=a.build*sh;const L=A.useLoan?price*.5:0;
  if(s.cash<price-L){s.auctions.push(a);return toast('Not enough cash');}
@@ -528,6 +544,11 @@ function randomEvents(y){
   choices:[{l:`Hire him (${money(50e3*CPI(y))})`,ok:()=>s.cash>=50e3*CPI(y),fx:()=>{s.cash-=50e3*CPI(y);s.luck=(s.luck||0)+.04;return 'Desk moved, fish tank installed, luck improved.'}},{l:'Send him away',fx:()=>''}]});
  if(s.biz.food&&y<1997&&Math.random()<.2)ev.push({t:'Triad "protection"',zh:'保護費',txt:'Young men in a Mong Kok alley suggest your restaurants need "looking after".',
   choices:[{l:`Pay up (${money(s.biz.food.cReal*CPI(y)*.05)})`,fx:()=>{s.cash-=s.biz.food.cReal*CPI(y)*.05;return 'Peace is kept.'}},{l:'Call the police',fx:()=>{if(Math.random()<.5){s.shock.food=.6;return 'A kitchen fire "accidentally" breaks out.'}return 'The police scare them off.'}}]});
+ // Normal/Tycoon: a listed group you control with under 50% can be bid for by a rival
+ if(HARD()&&s.ipo&&s.ipo.own<.5&&Math.random()<.15){const r=RIVALS[Math.floor(Math.random()*RIVALS.length)],m=mcap(),own=s.ipo.own,buy=(.51-own)*m*1.3,sell=own*m*1.3;
+  ev.push({t:'Hostile takeover bid',zh:'敵意收購',txt:`${r.n}'s ${r.co} offers outside shareholders 30% above the market price for ${groupName()}. You own only ${Math.round(own*100)}%.`,
+  choices:[{l:`Buy back shares to 51% (${money(buy)})`,ok:()=>s.cash>=buy,fx:()=>{s.cash-=buy;s.ipo.own=.51;return `You fought them off. You now own 51% of ${groupName()}.`}},
+   {l:`Sell your stake to ${r.co} (${money(sell)})`,fx:()=>{loseCompany(sell);return `${r.co} takes over ${groupName()}. You walk away with ${money(sell)} and your personal assets.`}}]});}
  if(['garment','toys','elec'].some(k=>s.biz[k])&&y<1995&&Math.random()<.06){const k=['garment','toys','elec'].find(k=>s.biz[k]);ev.push({t:'Factory fire',zh:'工廠火警',txt:`A fire guts a floor of your ${BZ[k].n}.`,fx:()=>{s.shock[k]=.5;return 'Profit halved this year.'}});}
  if(s.items.some(i=>i.k==='horse')&&Math.random()<.2)ev.push({t:'Your horse wins a Group race!',zh:'馬主揚威',txt:'You lead your horse into the winner\'s circle in front of a full grandstand.',fx:()=>{const p=300e3*CPI(y);s.cash+=p;s.faceBase+=2;return `Prize ${money(p)}, +2 Reputation.`}});
  if(!s.title&&face()>=60){ev.push({t:y<1997?'Knighthood':'Grand Bauhinia Medal',zh:y<1997?'封爵':'大紫荊勳章',txt:y<1997?'Your name appears in the Queen\'s Birthday Honours list. Arise, Sir.':'The Chief Executive awards you the territory\'s highest honour.',fx:()=>{s.title=y<1997?'Sir':'GBM';return '+10 Reputation'}});}
@@ -535,6 +556,8 @@ function randomEvents(y){
 }
 function pageantNow(){return s.pageant&&s.pageant.y===s.year&&!s.pageant.done?s.pageant:null}
 const courtOdds=()=>clamp(.05+face()/80,.05,.9), courtGift=()=>150e3*CPI(s.year);
+// the listed group goes to the buyer: company property, developments, businesses and the credit line leave with it
+function loseCompany(cash){s.cash+=cash-(s.pledge||0);s.pledge=0;s.props=s.props.filter(p=>!isCo(p));s.devs=[];s.biz={};s.credit=0;s.ipo=null;s.pco={inv:0,out:0};s.faceBase-=5;log(`Lost control of the group in a takeover. Received ${money(cash)}.`);}
 function tryCourt(name,y,P,gift){s.cash-=gift;if(Math.random()<P){s.spouses.push({name,src:`Miss Hong Kong ${y}`,face:8,cost:40e3});s.faceBase+=2;return `Front page of every paper: ${s.name} marries Miss Hong Kong ${name}!`}return `${name} politely declines. The magazines laugh at you.`}
 
 /* ================= YEAR TURN ================= */
@@ -566,7 +589,8 @@ function simulate(){
  s.props.filter(p=>p.gradual>0).forEach(p=>{const v=sellFrac(p,1/p.gradual);p.gradual--;notes.push(`🏘️ Sold a tranche of flats at your ${DM[p.d].en} estate for ${money(v)}${p.gradual?` (${p.gradual} left)`:' (all sold)'}.`);});
  const y0=s.year,preP=new Map(s.props.map(p=>[p.id,propVal(p,y0)])),preB={},preU=s.units,preD=s.devs.reduce((a,d)=>a+devVal(d),0);for(const k in s.biz)preB[k]=bizVal(k,y0);
  const y=s.year+1;s.year=y;s.age++;const luck=s.luck||0;const L=[];
- let rent=0,coRent=0;s.props.forEach(p=>{const r=propVal(p,y)*rentYield(p.t,y,p.d);rent+=r;if(isCo(p))coRent+=r;});
+ let rent=0,coRent=0;s.props.forEach(p=>{const r=propVal(p,y)*rentYield(p.t,y,p.d);rent+=r;if(isCo(p))coRent+=r;});s.bought={};
+ const hk=1-rentF(y),hold=rent*hk;rent-=hold;coRent*=1-hk;  // running costs and vacancy (Normal/Tycoon)
  let bizP=0;for(const k in s.biz){const b=s.biz[k];let m=bizMult(k,y)*(s.shock[k]??1);if(s.flags.bribed&&y<G(1977))m*=1.15;if(s.origin==='chiu'&&k==='trading')m*=1.25;if(k==='horse')continue;
   const pr=b.cReal*CPI(y)*BZ[k].roi*m*upgMult(b)*(.75+Math.random()*.5+luck);b.last=pr;b.earned=(b.earned||0)+pr;bizP+=pr;L.push([BZ[k].icon+' '+BZ[k].n,pr]);}
  const div=s.units*HSI[y]*.035;
@@ -604,7 +628,7 @@ function simulate(){
  const why=[['🏠 Property prices',propRe],['🏭 Business values',bizRe],['📈 Hang Seng holdings',stkRe],['🏗️ Developments (value growth plus construction spending)',devRe],['💵 Cash flow (income minus costs)',net],['🚗 Depreciation of toys',-dep]];
  why.push(['🎲 Events, deals, developments and other',navChg-why.reduce((a,w)=>a+w[1],0)]);
  if(s.ipo||snap.nw!==snap.nav)why.push(['🏛️ Share price vs net assets (listed group)',(nw-snap.nw)-navChg]);
- return {y,L,rent,bizP,div,horse,sal,interest,othInt,living,upkeep,build,tax,extra,divOut,net,nw,chg:nw-snap.nw,why};
+ return {y,L,rent,hold,bizP,div,horse,sal,interest,othInt,living,upkeep,build,tax,extra,divOut,net,nw,chg:nw-snap.nw,why};
 }
 function liquidate(){
  notes.push('<span class="neg"><b>Cash crunch!</b> Your creditors force sales:</span>');
@@ -612,7 +636,7 @@ function liquidate(){
  while(s.cash<0&&s.items.length){const i=s.items.pop();s.cash+=i.val*.7;notes.push(`• ${IT[i.k].n} sold`);}
  for(const k of Object.keys(s.biz)){if(s.cash>=0)break;const v=bizVal(k)*.7;s.cash+=v-(s.biz[k].loan||0);delete s.biz[k];notes.push(`• ${BZ[k].n} fire-sold for ${money(v)}`);}
  s.props.sort((a,b)=>(propVal(b)-b.loan)-(propVal(a)-a.loan));
- while(s.cash<0&&s.props.length){const p=s.props.shift();const v=propVal(p)*.9-p.loan;s.cash+=v;if(isCo(p))pco('out',v);notes.push(`• Bank repossessed ${PT[p.t].n} in ${DM[p.d].en} (equity ${money(v)})`);}
+ const fs=TY()?.65:HARD()?.75:.9;for(const p of [...s.props]){if(s.cash>=0)break;const v=propVal(p)*fs-p.loan;if(HARD()&&v<=0)continue;s.props=s.props.filter(x=>x!==p);s.cash+=v;if(isCo(p))pco('out',v);notes.push(`• Bank repossessed ${PT[p.t].n} in ${DM[p.d].en} (equity ${money(v)})`);}
  while(s.cash<0&&s.devs.length){const d=s.devs.shift();s.cash+=d.spent*.5-d.loan;pco('out',d.spent*.5-d.loan);notes.push(`• Unfinished site in ${DM[d.d].en} sold at a loss`);}
  if(s.cash<-20e3*CPI(s.year)){s.over='bankrupt';}else if(s.cash<0)notes.push('• You borrow from relatives to cover the gap.');
 }
@@ -625,7 +649,7 @@ function showReport(r){
   <div class="row"><button class="sm" onclick="A.devChoice('${p.id}','keep')">Keep and rent out (about ${money(v*rentYield('estate',s.year,p.d))}/yr)</button><button class="sm" onclick="A.devChoice('${p.id}','sell')">Sell all now (${money(v)})</button><button class="sm" onclick="A.devChoice('${p.id}','grad')">Sell 25% a year</button></div></div>`;});
  if(s.auctions.length)h+=`<div class="item" style="border-color:var(--gold)">🏗️ <b>New government land sales for ${r.y}:</b> ${landSaleLinks(true)}. Rival developers will bid too.</div>`;
  h+='<table>';
- if(r.sal)h+=row('Salary',r.sal);if(r.rent)h+=row('Rental income',r.rent);r.L.forEach(([l,v])=>h+=row(l,v));if(r.div)h+=row('Hang Seng dividends',r.div);if(r.horse)h+=row('Racing prize money',r.horse);
+ if(r.sal)h+=row('Salary',r.sal);if(r.rent||r.hold)h+=row('Rental income',r.rent+(r.hold||0));if(r.hold)h+=row(`Running costs (15%) and vacancy (${Math.round(vacancy(r.y)*100)}%)`,-r.hold);r.L.forEach(([l,v])=>h+=row(l,v));if(r.div)h+=row('Hang Seng dividends',r.div);if(r.horse)h+=row('Racing prize money',r.horse);
  if(r.interest)h+=row('Mortgage interest @ '+pc(mortRate(r.y)),-r.interest);if(r.othInt)h+=row('Interest on credit line, business and share loans',-r.othInt);h+=row('Household ('+(s.spouses.length?s.spouses.length+' spouse(s), ':'')+s.kids+' kids)',-r.living);if(r.upkeep)h+=row('Upkeep of toys',-r.upkeep);if(r.build)h+=row('Construction payments',-r.build);if(r.tax)h+=row('Profits tax (15%)',-r.tax);if(r.extra)h+=row('Typhoon repairs',-r.extra);if(r.divOut)h+=row('Dividends to outside shareholders',-r.divOut);
  h+=`<tr><th>Net cash flow</th><th class="n ${r.net<0?'neg':'pos'}">${money(r.net)}</th></tr></table>`;
  h+=`<p>Net worth: <b class="gold">${money(r.nw)}</b> <span class="${r.chg>=0?'pos':'neg'}">(${r.chg>=0?'+':''}${money(r.chg)})</span> · Property index ${PPI[r.y-1]}→${PPI[r.y]} · Hang Seng ${HSI[r.y-1].toLocaleString()}→${HSI[r.y].toLocaleString()}</p>`;
@@ -770,7 +794,7 @@ function pDistrict(){
  h+='</table>';
  s.auctions.filter(a=>a.d===d.k).forEach(a=>{const v=a.sqft*psf(d.k,y)*1.05;h+=`<div class="item"><div class="t">🏗️ Government land sale: ${(a.sqft/1000)}k sq ft residential site</div><div class="dim">Reserve price ${money(a.land)} + construction ${money(a.build)} over 3 years. Worth about ${money(v)} completed at today's prices. Ready ${y+3}. Bidding against <b>${a.rivals.join('</b> and <b>')}</b>: the winner pays just above the runner-up. ${A.useLoan?'Bank lends 50% of the land price.':'Paying all cash (mortgage box unticked).'}</div>
  <div class="row"><label class="chk"><input type="checkbox" ${A.jv?'checked':''} onchange="A.toggleJV()"> Bid as a 50/50 joint venture with <b>${jvPartner(a)}</b>: you pay half and get half the flats and profit</label></div>
- <div class="row">Your maximum bid: ${BIDS.map((b,i)=>{const p=a.land*(1+b);return `<button class="sm" ${s.cash>=p*(A.jv?.5:1)*(A.useLoan?.5:1)?'':'disabled'} onclick="A.bidSite('${a.id}',${i})">${b?'+'+b*100+'%':'Reserve'} (${money(p)})</button>`}).join('')}</div></div>`;});
+ ${landBarred()?'<div class="neg">Your Reputation is below 0: the Lands Department will not accept your bids.</div>':''}${HARD()&&face()>=40?'<div class="pos">Reputation 40+: rivals bid 5% less against you.</div>':''}<div class="row">Your maximum bid: ${BIDS.map((b,i)=>{const p=a.land*(1+b);return `<button class="sm" ${s.cash>=p*(A.jv?.5:1)*(A.useLoan?.5:1)?'':'disabled'} onclick="A.bidSite('${a.id}',${i})">${b?'+'+b*100+'%':'Reserve'} (${money(p)})</button>`}).join('')}</div></div>`;});
  const mine=s.props.filter(p=>p.d===d.k);if(mine.length)h+='<h3>Your holdings here</h3>'+propTable(mine);
  return h;
 }
@@ -810,6 +834,7 @@ function forecast(n=3){const y=s.year,rate=mortRate(y),luck=s.luck||0,out=[];let
    if(s.flags.bribed&&yr<G(1977))m*=1.15;if(s.origin==='chiu'&&k==='trading')m*=1.25;
    const pr=b.cReal*CPI(y)*BZ[k].roi*m*upgMult(b)*(1+luck);bizP+=pr;C(BZ[k].icon+' '+BZ[k].n,pr);}
   C('Rent from company property',coRent);P('Rent from personal property',pRent);
+  if(HARD()){const k=.2,ck=coRent*k,pk=pRent*k;C('Running costs and 5% vacancy',-ck);P('Running costs and 5% vacancy',-pk);coRent-=ck;pRent-=pk;}
   P('Hang Seng dividends',s.units*HSI[y]*.035);
   P('Racing prize money (average)',s.items.reduce((a,it)=>a+(it.k==='horse'?it.cost*.13*(yr>=1978?1.4:1):0),0));
   P('Salary',Object.keys(s.biz).length?0:salary(y,age));
@@ -908,12 +933,12 @@ function renderTicker(){const ev=eventsIn(s.year).map(e=>`${e.zh} ${e.t}`);const
 /* ================= START / HELP ================= */
 A.newGame=()=>{
  showModal(`<div class="yr">1970 · BRITISH HONG KONG</div><h2>Pearl of the Orient <span class="zh">東方之珠</span></h2><p>It is 1970. You are 22, with a little money and big ambitions. The population is 3.9 million, a 500 sq ft flat in Kowloon costs about ${money(500*psf('KC',1970))}, and the Hang Seng stands at 211. You have 56 years to become the largest tycoon.</p>
- <p>Your name: <input type="text" id="nm" value="Wong Kar-fai" maxlength="30"></p><p><label class="chk"><input type="checkbox" id="shuf"> 🔀 <b>Shuffled history</b>: the same events and market swings, but at different times (each moves up to about 4 years). The Joint Declaration and the Handover keep their dates, and MTR lines open on schedule. The real dates are revealed at the end.</label></p><p>Your origins:</p><div class="choices">
+ <p>Your name: <input type="text" id="nm" value="Wong Kar-fai" maxlength="30"></p><p><label class="chk"><input type="checkbox" id="shuf"> 🔀 <b>Shuffled history</b>: the same events and market swings, but at different times (each moves up to about 4 years). The Joint Declaration and the Handover keep their dates, and MTR lines open on schedule. The real dates are revealed at the end.</label></p><p>Difficulty: <select id="diff"><option value="easy">Easy: property always pays</option><option value="normal" selected>Normal: banks recall loans, buildings cost money to run</option><option value="tycoon">Tycoon: harsher recalls and fire sales</option></select></p><p class="dim">Normal and Tycoon: when prices fall, banks call in mortgages that rise 20 points above the lending limit (Tycoon 10) and repossessed buildings sell at 75% (65%). Rent loses 15% to running costs plus vacancy (5%, more in slumps). Rates spike in 1998. Each extra buy in one district in the same year costs 4% more. Reputation below 0 means dearer loans and no land sales; 40+ means cheaper loans. If you own under half your listed group, rivals may bid for it.</p><p>Your origins:</p><div class="choices">
  <button onclick="A.start('shanghai')">🧵 <b>Shanghainese mill heir</b>: own a garment factory, HK$120K cash</button>
  <button onclick="A.start('chiu')">🚢 <b>Chiu Chow trader's son</b>: HK$200K cash, +25% trading profits</button>
  <button onclick="A.start('office')">💼 <b>Central office clerk</b>: HK$40K savings, a steady salary that rises each year, higher living costs, and a bank loan line of up to 3× salary while you keep the job</button></div>`);
 };
-A.start=o=>{const n=(($('#nm')||{}).value||'Wong Kar-fai').trim();s=freshState(n,o);s.tl=($('#shuf')||{}).checked?makeTimeline():null;applyTimeline(s.tl);genAuctions();s.hist.push({y:1970,nw:netWorth()});log(`${n} sets out to conquer Hong Kong.`);A.selD=null;A.tab='Map';save();closeModal();render();};
+A.start=o=>{const n=(($('#nm')||{}).value||'Wong Kar-fai').trim();s=freshState(n,o);s.diff=($('#diff')||{}).value||'easy';s.tl=($('#shuf')||{}).checked?makeTimeline():null;applyTimeline(s.tl);genAuctions();s.hist.push({y:1970,nw:netWorth()});log(`${n} sets out to conquer Hong Kong.`);A.selD=null;A.tab='Map';save();closeModal();render();};
 A.help=()=>showModal(`<h2>Sources & notes</h2><p>The idea comes from Karpathy's Civ-style map of US public data. Every series below was downloaded from an official or published source unless marked <b>estimated</b>:</p><ul>
 <li><b>District populations — official C&SD counts</b>: 1981 Census District Board Tabulations (domestic-household persons, scaled to the 5,109,812 territory total; Mong Kok + Yau Ma Tei merged into Yau Tsim Mong; Tsuen Wan split into Tsuen Wan / Kwai Tsing by their 1991 ratio, since Kwai Tsing became a district in 1985); 1991, 1996, 2001 (2001 Census Table 1); 2011, 2016, 2021 (2021 Census Main Results Table 3.20). <b>1971 is estimated</b>: districts did not exist yet, so it is back-projected and scaled to the official 1971 total of 3,936,630.</li>
 <li><b>Property prices</b>: Rating & Valuation Department private domestic price index (all classes, 1999=100), official 1980–2025; <b>1970–79 estimated</b>. Absolute prices per sq ft and gross rental yields use RVD class B (40–69.9 m²) average prices and rents for Hong Kong Island, Kowloon and the New Territories, 1986–2025. Before 1986 prices follow the index and yields use the 1986 levels (estimated). The premium of each district within its region is a game estimate driven by census population growth and MTR openings.</li><li><b>Hang Seng Index</b>: year-end closes 1970–2025 (Hang Seng Indexes Co. via Wikipedia, checked against Yahoo Finance from 1986).</li><li><b>Interest rates</b>: HKMA best lending rate (HSBC), annual averages 1971–2025; 1970 assumed 8%. Mortgage rate in game = BLR + 0.5% before 2000, BLR − 1.75% after.</li><li><b>Listing your group</b>: share price = net assets × market mood, where mood = Hang Seng close ÷ its 5-year average (real index data), capped at 0.5–1.6, × 0.85. The formula itself is a game rule.</li><li><b>US$ display</b>: values converted at each year's HK$ per US$ rate; 7.80 from 1984 (linked rate since October 1983); <b>1970–83 approximate</b>.</li><li><b>Inflation</b>: C&SD Composite CPI from 1981, chained to CPI(A) 1975–80; <b>1970–74 estimated</b>. Used for business costs, wages and prices of goods.</li>
@@ -925,7 +950,7 @@ const ORIGIN={shanghai:'🧵',chiu:'🚢',street:'🥢',office:'💼'};
 function useGame(g){s=g;applyTimeline(s.tl);if(s.auctions&&s.auctions.some(a=>!a.rivals))genAuctions();  // saves from before rival bidding
  A.selD=null;A.tab='Map';save();closeModal();render();}
 A.games=()=>{save();const L=savedGames();let h=`<h2>Manage saves</h2><p class="dim">Games save automatically after every action, in this browser only. Export a file to back one up or move it to another device.</p><table style="width:100%">`;
- for(const g of L){const cur=g.id===s.id;h+=`<tr><td>${ORIGIN[g.o]||''}${g.sh?' 🔀':''} <b>${g.n}</b>${cur?' <span class="pos">· playing</span>':''}<br><span class="dim">${g.y}${g.over?' · '+(g.over==='bankrupt'?'bankrupt':'finished'):''} · ${money(g.nw)} · saved ${new Date(g.t).toLocaleString()}</span></td>
+ for(const g of L){const cur=g.id===s.id;h+=`<tr><td>${ORIGIN[g.o]||''}${g.sh?' 🔀':''} <b>${g.n}</b> <span class="pill">${DIFF[g.d||'easy']}</span>${cur?' <span class="pos">· playing</span>':''}<br><span class="dim">${g.y}${g.over?' · '+(g.over==='bankrupt'?'bankrupt':'finished'):''} · ${money(g.nw)} · saved ${new Date(g.t).toLocaleString()}</span></td>
  <td style="text-align:right;white-space:nowrap">${cur?'':`<button onclick="A.loadGame('${g.id}')">Load</button> <button onclick="A.delGame('${g.id}')">Delete</button>`}</td></tr>`;}
  h+=`</table><div class="choices"><button onclick="A.newGame()">➕ New game (this one stays saved)</button><button onclick="A.copyGame()">📑 Save a copy of this game, to try another path</button>
  <button onclick="A.exportGame()">💾 Export this game to a file</button><button onclick="$('#impFile').click()">📂 Import a game from a file</button><button onclick="closeModal()">Close</button></div>

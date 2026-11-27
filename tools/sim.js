@@ -45,6 +45,13 @@ function aggressive(){
   for(const k of ['trading','port','retail','bank','broker','junket']){const b=BZ[k];if(!s.biz[k]&&s.year>=b.from&&(!b.to||s.year<b.to)&&s.cash>b.cost*CPI(s.year)*2+buffer()&&(!b.req||(face()>=b.req.face&&netWorth()>=b.req.nw*CPI(s.year))))A.buyBiz(k);}
   let n=0; while(n++<400){const k=pick(D).k,t=pick(['building','office','shop']),c=buyCost(k,t);if(PT[t].only&&!PT[t].only.includes(k))continue;if(s.cash-c.need>buffer()+c.loan*mortRate(s.year))A.buyProp(k,t);else break;}
 }
+// moderate: like aggressive, but never remortgages and keeps three years' interest in cash
+function moderate(){
+  const buffer=()=>interest()*3;
+  for(const a of [...s.auctions]) if(s.cash-a.land*.5>a.build+buffer()) A.bidSite(a.id,1);
+  for(const k of ['trading','port','retail','bank','broker','junket']){const b=BZ[k];if(!s.biz[k]&&s.year>=b.from&&(!b.to||s.year<b.to)&&s.cash>b.cost*CPI(s.year)*2+buffer()&&(!b.req||(face()>=b.req.face&&netWorth()>=b.req.nw*CPI(s.year))))A.buyBiz(k);}
+  let n=0; while(n++<400){const k=pick(D).k,t=pick(['building','office','shop']),c=buyCost(k,t);if(PT[t].only&&!PT[t].only.includes(k))continue;if(s.cash-c.need>buffer()+c.loan*mortRate(s.year))A.buyProp(k,t);else break;}
+}
 function tycoon(){
   // list in hot markets, sell more stock while hot, buy back cheaply after crashes
   const mood=hsiMood(s.year);
@@ -54,7 +61,7 @@ function tycoon(){
   aggressive();
 }
 function runGame(strategy){
-  localStorage.clear(); A.start(START); A.useLoan=true; const path=[]; __ev=[];
+  localStorage.clear(); A.start(START); s.diff=SIMDIFF; A.useLoan=true; const path=[]; __ev=[];
   for(let i=0;i<60&&!s.over;i++){ if(s.year>=2025){A.advance();break;} strategy(); playYear();
     if(s.pendingDeath){ if(s.kids){A.chooseHeir(0);__ev.push(s.year+'heir');} else successionModal('death'); }
     if(s.year%10==0) path.push(s.year+':'+money(netWorth())); }
@@ -62,9 +69,10 @@ function runGame(strategy){
 }
 `, ctx);
 vm.runInContext('var START='+JSON.stringify(process.argv[4]||'chiu'),ctx);
+vm.runInContext('var SIMDIFF='+JSON.stringify(process.argv[5]||'easy'),ctx);
 const runs = +process.argv[2] || 5;
 const only = process.argv[3];  // optional: run one strategy, e.g. node tools/sim.js 5 tycoon
-for (const name of ['cautious', 'aggressive', 'tycoon'].filter(n => !only || n === only)) {
+for (const name of ['cautious', 'moderate', 'aggressive', 'tycoon'].filter(n => !only || n === only)) {
   const res = [];
   for (let i = 0; i < runs; i++) res.push(vm.runInContext(`runGame(${name})`, ctx));
   res.sort((a, b) => a.nw - b.nw);
