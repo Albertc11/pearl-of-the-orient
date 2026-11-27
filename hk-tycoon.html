@@ -371,7 +371,7 @@ function buyCost(k,t){
  let duty=.03;if(s.year>=G(2013)&&s.year<G(2024)&&ownsResidential())duty=.15;
  const loan=A.useLoan?price*LTV(s.year):0;return {price,duty:price*duty,loan,need:price-loan+price*duty};
 }
-A.buyProp=(k,t)=>{const c=buyCost(k,t);if(s.cash<c.need)return toast('Not enough cash');const own=A.buyFor==='me'?'me':'co';s.cash-=c.need;if(own==='co')pco('inv',c.need);s.bought=s.bought||{};s.bought[k]=(s.bought[k]||0)+1;s.props.push({id:uid(),d:k,t,sqft:PT[t].sqft,cost:c.price,loan:c.loan,yb:s.year,own});log(`Bought ${PT[t].n} in ${DM[k].en} ${own==='co'?'for '+propName():'personally'} for ${money(c.price)}${c.loan?` (mortgage ${money(c.loan)})`:''}`);render();};
+A.buyProp=(k,t)=>{const c=buyCost(k,t);if(s.cash<c.need)return toast('Not enough cash');const own=A.buyFor==='me'?'me':'co';s.cash-=c.need;if(own==='co')pco('inv',c.need);s.bought=s.bought||{};s.bought[k]=(s.bought[k]||0)+1;if([1974,1984,2003,2009].some(b=>G(b)===s.year))s.flags.bottom=1;s.props.push({id:uid(),d:k,t,sqft:PT[t].sqft,cost:c.price,loan:c.loan,yb:s.year,own});log(`Bought ${PT[t].n} in ${DM[k].en} ${own==='co'?'for '+propName():'personally'} for ${money(c.price)}${c.loan?` (mortgage ${money(c.loan)})`:''}`);render();};
 function ssd(p){if(s.year>=G(2010)&&s.year<G(2024)&&s.year-p.yb<=2)return .15;return 0}
 function sellFrac(p,frac){const v=propVal(p)*frac,l=p.loan*frac,fee=v*(.01+ssd(p));s.cash+=v-l-fee;if(isCo(p))pco('out',v-l-fee);log(`Sold ${frac<1?Math.round(frac*100)+'% of ':''}${PT[p.t].n} in ${DM[p.d].en} for ${money(v)}${ssd(p)?' (paid Special Stamp Duty)':''}`);if(frac>=1)s.props=s.props.filter(x=>x!==p);else{p.sqft*=1-frac;p.loan-=l;p.cost*=1-frac;}return v}
 A.sellProp=(id,frac=1)=>{const p=s.props.find(x=>x.id===id);if(!p)return;sellFrac(p,frac);render();};
@@ -389,12 +389,12 @@ const BIDS=[0,.15,.3,.5];
 A.jv=false;A.toggleJV=()=>{A.jv=!A.jv;render();};
 const jvPartner=a=>RIVALS.map(r=>r.co).find(c=>!a.rivals.includes(c));
 // English auction: the highest bidder wins and pays just above the runner-up's ceiling (never below the reserve)
-const landBarred=()=>HARD()&&face()<0, rivalCap=a=>a.rivalMax*(HARD()&&face()>=40?.95:1);
+const landBarred=()=>HARD()&&face()<0, rivalCap=a=>a.rivalMax*(HARD()&&face()>=40?.95:1)*(s.flags.golf?.9:1);
 A.bidSite=(id,i)=>{const a=s.auctions.find(x=>x.id===id);const bid=a.land*(1+BIDS[i]);
  if(landBarred())return toast('The Lands Department will not accept bids from someone with your reputation');
  s.auctions=s.auctions.filter(x=>x!==a);const rivalMax=rivalCap(a);
  if(bid<rivalMax){const win=a.rivals[0];log(`Outbid for the ${(a.sqft/1000)}k sq ft site in ${DM[a.d].en}: ${win} paid about ${money(rivalMax)}.`);toast(`${win} outbid you at about ${money(rivalMax)}`);return render();}
- const full=Math.max(a.land,Math.min(bid,rivalMax*1.01));
+ const full=Math.max(a.land,Math.min(bid,rivalMax*1.01));s.flags.golf=0;
  // joint venture: a partner group pays half and takes half of the flats, costs and profit
  const sh=A.jv?.5:1,partner=A.jv?jvPartner(a):null,price=full*sh,sq=a.sqft*sh,bld=a.build*sh;const L=A.useLoan?price*.5:0;
  if(s.cash<price-L){s.auctions.push(a);return toast('Not enough cash');}
@@ -437,11 +437,11 @@ function privCost(){return s.ipo?(1-s.ipo.own)*mcap()*1.3:0}
 A.privatise=()=>{const c=privCost();if(!s.ipo||s.cash<c)return;if(s.pledge)return toast('Repay your share-pledge loan before taking the company private');s.cash-=c;s.ipo=null;log(`Took ${groupName()} private, buying out minority shareholders for ${money(c)}.`);render();};
 A.buyHSI=f=>{const amt=Math.max(0,s.cash)*f;if(amt<=0)return;s.units+=amt*.995/HSI[s.year];s.cash-=amt;render();};
 A.sellHSI=f=>{const u=s.units*f;s.cash+=u*HSI[s.year]*.995;s.units-=u;render();};
-A.derby=()=>{if(s.flags.derby)return;s.flags.derby=1;const bet=Math.max(0,s.cash)*.1;const win=Math.random()<.2+(s.luck||0)/2;s.cash+=win?bet*3.5:-bet;const msg=win?`Your horse romped home at 9-2! You won ${money(bet*3.5)}.`:`Your horse finished down the field. Lost ${money(bet)}.`;log('Derby bet: '+msg);toast(msg);render();};
-A.markSix=()=>{if(s.flags.m6)return;s.flags.m6=1;const c=2e3*CPI(s.year);s.cash-=c;if(Math.random()<.004){const w=8e6*CPI(s.year);s.cash+=w;log('MARK SIX JACKPOT! '+money(w));toast('🎉 MARK SIX JACKPOT: '+money(w));}else toast('No luck in this year\'s Mark Six draws.');render();};
+A.derby=()=>{if(s.flags.derby)return;s.flags.derby=1;const bet=Math.max(0,s.cash)*.1;const win=Math.random()<.2+(s.luck||0)/2;s.cash+=win?bet*3.5:-bet;if(win)s.flags.derbyWon=1;const msg=win?`Your horse romped home at 9-2! You won ${money(bet*3.5)}.`:`Your horse finished down the field. Lost ${money(bet)}.`;log('Derby bet: '+msg);toast(msg);render();};
+A.markSix=()=>{if(s.flags.m6)return;s.flags.m6=1;const c=2e3*CPI(s.year);s.cash-=c;if(Math.random()<.004){const w=8e6*CPI(s.year);s.cash+=w;s.flags.m6won=1;log('MARK SIX JACKPOT! '+money(w));toast('🎉 MARK SIX JACKPOT: '+money(w));}else toast('No luck in this year\'s Mark Six draws.');render();};
 A.buyItem=k=>{const c=IT[k].cost*CPI(s.year);if(s.cash<c)return toast('Not enough cash');s.cash-=c;s.items.push({id:uid(),k,val:c,cost:c});log(`Bought ${IT[k].n} (${money(c)})`);render();};
 A.sellItem=id=>{const i=s.items.find(x=>x.id===id);s.cash+=i.val*.9;s.items=s.items.filter(x=>x!==i);render();};
-A.donate=lvl=>{const amt=[1e5,1e6,1e7][lvl]*CPI(s.year),f=[3,10,25][lvl];if(s.cash<amt)return toast('Not enough cash');s.cash-=amt;s.faceBase+=f;log(`Donated ${money(amt)} — "${s.name} ${['Scholarship','Hospital Wing','University Tower'][lvl]}" (+${f} Reputation)`);render();};
+A.donate=lvl=>{const amt=[1e5,1e6,1e7][lvl]*CPI(s.year),f=[3,10,25][lvl];if(s.cash<amt)return toast('Not enough cash');s.cash-=amt;s.faceBase+=f;s.flags.donated=(s.flags.donated||0)+amt;log(`Donated ${money(amt)} — "${s.name} ${['Scholarship','Hospital Wing','University Tower'][lvl]}" (+${f} Reputation)`);render();};
 A.divorce=i=>{const sp=s.spouses[i];const cost=Math.max(0,netWorth())*.2;s.cash-=cost;s.spouses.splice(i,1);s.faceBase-=3;log(`Divorced ${sp.name}. Settlement ${money(cost)}.`);render();};
 A.court=divorceFirst=>{const p=pageantNow();if(!p||s.cash<courtGift())return;if(divorceFirst&&married())A.divorce(0);if(married()&&s.flags.mono)return;p.done=1;log(tryCourt(p.name,p.y,courtOdds(),courtGift()));render();};
 A.gala=()=>{const p=pageantNow();if(!p)return;p.done=1;s.faceBase+=1;log('You attend the Miss Hong Kong gala and are photographed by the gossip magazines. +1 Reputation.');render();};
@@ -533,13 +533,13 @@ const EVENTS=[
 function randomEvents(y){
  const ev=[];const fixedTyphoon=eventsIn(y).some(e=>/Typhoon/.test(e.t));
  if(y<G(1974)&&!s.flags.briAsk&&Object.keys(s.biz).length&&Math.random()<.5){s.flags.briAsk=1;ev.push({t:'A friendly police sergeant',zh:'茶錢',txt:'"Inspectors can be very slow, Boss. A small monthly arrangement keeps things smooth." Everyone does it, they say.',
-  choices:[{l:`Pay the "tea money" (${money(15e3*CPI(y))}/yr equivalent, +15% business profit)`,ok:()=>s.cash>=15e3*CPI(y),fx:()=>{s.cash-=15e3*CPI(y);s.flags.bribed=1;return 'Inspections become strangely rare.'}},{l:'Refuse',fx:()=>{Object.keys(s.biz).forEach(k=>s.shock[k]=.9);return 'Your licences take months to renew. Business -10% this year.'}}]});}
+  choices:[{l:`Pay the "tea money" (${money(15e3*CPI(y))}/yr equivalent, +15% business profit)`,ok:()=>s.cash>=15e3*CPI(y),fx:()=>{s.cash-=15e3*CPI(y);s.flags.bribed=1;s.flags.everBribed=1;return 'Inspections become strangely rare.'}},{l:'Refuse',fx:()=>{Object.keys(s.biz).forEach(k=>s.shock[k]=.9);return 'Your licences take months to renew. Business -10% this year.'}}]});}
  if((y===1975||y===1976)&&s.flags.bribed&&Math.random()<.3)ev.push({t:'ICAC investigation',zh:'廉署調查',txt:'Two polite officers ask about payments to a police syndicate.',fx:()=>{const l=Math.max(0,s.cash)*.25;s.cash-=l;s.faceBase-=15;s.flags.bribed=0;return `You settle. Lost ${money(l)}.`}});
  if(!fixedTyphoon&&Math.random()<.35)ev.push({t:'Typhoon Signal No. 8',zh:'八號風球',txt:'The city shuts down for a day and a half. Mahjong tables everywhere.',fx:()=>typhoon(8)});
  // Miss Hong Kong is no longer a popup: the winner is announced in the ticker and courted from the Lifestyle tab
  if(y>=1973)s.pageant={y,name:SURN[(y*7)%SURN.length]+' '+GIVEN[(y*11)%GIVEN.length],done:0};
  if(Math.random()<.1&&s.cash>0)ev.push({t:'A hot stock tip',zh:'貼士',txt:'Your barber swears a small-cap is about to be "injected with assets" by a mainland parent.',
-  choices:[{l:'Punt 10% of cash',fx:()=>{const a=s.cash*.1,m=Math.random()<.4+(s.luck||0)?1+Math.random()*2:Math.random()*.5;s.cash+=a*(m-1);return m>1?`It flew! You made ${money(a*(m-1))}.`:`It collapsed. Lost ${money(a*(1-m))}.`}},{l:'Ignore it',fx:()=>''}]});
+  choices:[{l:'Punt 10% of cash',fx:()=>{const a=s.cash*.1,m=Math.random()<.4+(s.luck||0)?1+Math.random()*2:Math.random()*.5;s.cash+=a*(m-1);if(m>1)s.flags.tipGain=a*(m-1);return m>1?`It flew! You made ${money(a*(m-1))}.`:`It collapsed. Lost ${money(a*(1-m))}.`}},{l:'Ignore it',fx:()=>''}]});
  if(Math.random()<.07)ev.push({t:'A feng shui master',zh:'風水師傅',txt:'He says your desk faces the wrong way and your front door lets the money out.',
   choices:[{l:`Hire him (${money(50e3*CPI(y))})`,ok:()=>s.cash>=50e3*CPI(y),fx:()=>{s.cash-=50e3*CPI(y);s.luck=(s.luck||0)+.04;return 'Desk moved, fish tank installed, luck improved.'}},{l:'Send him away',fx:()=>''}]});
  if(s.biz.food&&y<1997&&Math.random()<.2)ev.push({t:'Triad "protection"',zh:'保護費',txt:'Young men in a Mong Kok alley suggest your restaurants need "looking after".',
@@ -550,10 +550,79 @@ function randomEvents(y){
   choices:[{l:`Buy back shares to 51% (${money(buy)})`,ok:()=>s.cash>=buy,fx:()=>{s.cash-=buy;s.ipo.own=.51;return `You fought them off. You now own 51% of ${groupName()}.`}},
    {l:`Sell your stake to ${r.co} (${money(sell)})`,fx:()=>{loseCompany(sell);return `${r.co} takes over ${groupName()}. You walk away with ${money(sell)} and your personal assets.`}}]});}
  if(['garment','toys','elec'].some(k=>s.biz[k])&&y<1995&&Math.random()<.06){const k=['garment','toys','elec'].find(k=>s.biz[k]);ev.push({t:'Factory fire',zh:'工廠火警',txt:`A fire guts a floor of your ${BZ[k].n}.`,fx:()=>{s.shock[k]=.5;return 'Profit halved this year.'}});}
- if(s.items.some(i=>i.k==='horse')&&Math.random()<.2)ev.push({t:'Your horse wins a Group race!',zh:'馬主揚威',txt:'You lead your horse into the winner\'s circle in front of a full grandstand.',fx:()=>{const p=300e3*CPI(y);s.cash+=p;s.faceBase+=2;return `Prize ${money(p)}, +2 Reputation.`}});
+ if(s.items.some(i=>i.k==='horse')&&Math.random()<.2)ev.push({t:'Your horse wins a Group race!',zh:'馬主揚威',txt:'You lead your horse into the winner\'s circle in front of a full grandstand.',fx:()=>{s.flags.gw=(s.flags.gw||0)+1;const p=300e3*CPI(y);s.cash+=p;s.faceBase+=2;return `Prize ${money(p)}, +2 Reputation.`}});
+ // ===== personal and business misadventures (Tycoon: 1.5x as often). Costs scale with your fortune. =====
+ const P=p=>Math.random()<p*(TY()?1.5:1),nwp=f=>Math.max(0,netWorth())*f,has=k=>s.items.some(i=>i.k===k),scan=()=>s.flags.scandals=(s.flags.scandals||0)+1;
+ if(['ferrari','rolls','benz'].some(has)&&P(.05)){const c=Math.max(200e3*CPI(y),nwp(.01));ev.push({t:'Sports car crash on Peak Road',zh:'山頂撞車',txt:'You wrap your car around a lamp post at 2am. A taxi driver is hurt, and a photographer is already there.',
+  choices:[{l:`Pay the victim and apologise (${money(c)}, −3 Reputation)`,fx:()=>{s.cash-=c;s.faceBase-=3;return 'The apology runs on page 6. The story fades.'}},
+   {l:`Hush it up (${money(c/2)})`,fx:()=>{s.cash-=c/2;if(Math.random()<.5){s.faceBase-=10;scan();return 'The driver talks to Next Magazine: "TYCOON HIT-AND-RUN COVER-UP". −10 Reputation.'}return 'Money changes hands. Nobody hears of it.'}}]});}
+ if(married()&&P(.04)){const sil=Math.max(300e3*CPI(y),nwp(.02)),set=nwp(.2);ev.push({t:'Caught with a TVB starlet',zh:'婚外情',txt:'Paparazzi photos of you leaving a Kowloon Tong "love hotel" land on an editor\u2019s desk.',
+  choices:[{l:`Pay for silence (${money(sil)})`,fx:()=>{s.cash-=sil;return 'The photos are bought and burned. This time.'}},
+   {l:'Deny everything',fx:()=>{if(Math.random()<.5){s.faceBase-=8;scan();return 'The photos run on the front page. −8 Reputation.'}return 'The editor blinks first.'}},
+   {l:`Divorce and move on (${money(set)}, −5 Reputation)`,fx:()=>{const sp=s.spouses.pop();s.cash-=set;s.faceBase-=5;scan();log(`Divorced ${sp.name} after a scandal.`);return `${sp.name} takes ${money(set)} and the house in Repulse Bay.`}}]});}
+ if(s.kids&&!s.flags.kidnap&&netWorth()/CPI(y)>2e7&&P(.04)){const r=nwp(.05);ev.push({t:'Kidnapping',zh:'綁架',txt:'Your eldest child does not come home from school. A phone call demands a ransom and warns you not to call the police.',
+  choices:[{l:`Pay the ransom (${money(r)})`,fx:()=>{s.flags.kidnap=1;s.cash-=r;return 'Your child is released unharmed on a Lantau hillside.'}},
+   {l:'Call the police',fx:()=>{s.flags.kidnap=1;if(Math.random()<.7){s.faceBase+=5;return 'The Special Duties Unit storms a Sai Kung village house. Child rescued, gang jailed. +5 Reputation.'}s.cash-=r*2;return `The police operation goes wrong. You end up paying double: ${money(r*2)}.`}}]});}
+ if(s.kids&&s.age>=50&&P(.05)){const d=Math.max(500e3*CPI(y),nwp(.01));ev.push({t:'Your son\u2019s Macau baccarat debts',zh:'敗家子',txt:`Your son has lost ${money(d)} in a VIP room in Macau. The junket operator is very polite about it.`,
+  choices:[{l:`Pay his debts (${money(d)})`,fx:()=>{s.cash-=d;return 'Paid. He swears it will never happen again.'}},
+   {l:'Disown him (lose an heir, −2 Reputation)',fx:()=>{s.kids--;s.heirs=null;s.faceBase-=2;scan();return 'The papers love it. He moves to Vancouver.'}}]});}
+ if(s.age>=65&&s.kids>=2&&!s.flags.feud&&P(.08)){const g=nwp(.01)*s.kids;ev.push({t:'Family feud over the inheritance',zh:'爭產',txt:'Your children are already fighting over who gets what. Lawyers are circling.',
+  choices:[{l:`Settle it now with gifts to each child (${money(g)})`,fx:()=>{s.flags.feud=1;s.cash-=g;return 'An uneasy family dinner, but no lawsuits.'}},
+   {l:'Let them fight it out',fx:()=>{s.flags.feud=1;const c=nwp(.05);s.cash-=c;s.faceBase-=5;scan();return `The case reaches the High Court. Legal bills: ${money(c)}. −5 Reputation.`}}]});}
+ if(s.age>=50&&P(.05)){const c=Math.max(300e3*CPI(y),nwp(.005));ev.push({t:'Health scare',zh:'健康警號',txt:'Chest pains during a banquet at the Mandarin. The doctor wants tests.',
+  choices:[{l:`Fly to the Mayo Clinic for the best care (${money(c)})`,fx:()=>{s.cash-=c;return 'A clean bill of health, and a new diet.'}},
+   {l:'Shrug it off',fx:()=>{s.flags.ill=(s.flags.ill||0)+1;return 'You feel fine. Mostly. (Higher chance of dying from now on.)'}}]});}
+ if(s.flags.tipGain&&y>=G(1989)&&Math.random()<.3){const f=s.flags.tipGain*3;s.flags.tipGain=0;ev.push({t:'Securities and Futures Commission probe',zh:'證監會調查',txt:'Investigators ask how you knew about that small-cap before the announcement.',fx:()=>{s.cash-=f;s.faceBase-=10;scan();return `Insider dealing. Fined ${money(f)}, three times your profit. −10 Reputation.`}});}
+ if(s.props.length&&P(.04)){const c=s.props.reduce((a,p)=>a+propVal(p),0)*.005;ev.push({t:'Illegal structures exposed',zh:'僭建',txt:'A reporter finds an unauthorised rooftop extension on one of your buildings.',
+  choices:[{l:`Pay the fine and tear it down (${money(c)}, −2 Reputation)`,fx:()=>{s.cash-=c;s.faceBase-=2;return 'Demolished. Apology issued.'}},
+   {l:'Fight it in court',fx:()=>{if(Math.random()<.5)return 'Your lawyers find a loophole.';s.cash-=c*2;s.faceBase-=6;scan();return `You lose, and the judge calls you arrogant. ${money(c*2)} and −6 Reputation.`}}]});}
+ {const bk=Object.keys(s.biz).filter(k=>k!=='horse');if(bk.length&&P(.03)){const k=bk[Math.floor(Math.random()*bk.length)];ev.push({t:'Partner runs off with the money',zh:'捲款潛逃',txt:`The general manager of your ${BZ[k].n} has flown to Taiwan with the company accounts.`,fx:()=>{s.biz[k].cReal*=.7;return `Your ${BZ[k].n} loses 30% of its value.`}});}}
+ if(P(.05)){const up=Math.random()<.5;ev.push({t:up?'Your interview goes viral':'Your interview goes badly',zh:'訪問',txt:up?'Your rags-to-riches story on Pearl Report has the whole city talking.':'You call young people lazy on a TV chat show. The city is furious.',fx:()=>{s.faceBase+=up?4:-4;return up?'+4 Reputation.':'−4 Reputation.'}});}
+ if(has('horse')&&P(.05)){ev.push({t:'Your horse breaks down at Sha Tin',zh:'馬匹受傷',txt:'Your racehorse pulls up lame in the final straight. The vet shakes his head.',fx:()=>{const i=s.items.findIndex(i=>i.k==='horse');if(i>=0)s.items.splice(i,1);return 'Your racehorse is retired.'}});}
+ if(P(.06)){const c=200e3*CPI(y);ev.push({t:'Junk party in Sai Kung',zh:'遊艇派對',txt:'The tai-tais of the Mid-Levels expect you to host this summer\u2019s junk trip.',
+  choices:[{l:`Host a lavish one (${money(c)}, +2 Reputation)`,ok:()=>s.cash>=c,fx:()=>{s.cash-=c;s.faceBase+=2;s.luck=(s.luck||0)+.01;return 'Champagne, seafood on Lamma, and two useful new friends.'}},{l:'Make an excuse',fx:()=>''}]});}
+ if(face()>=20&&!s.flags.golf&&P(.05)){ev.push({t:'A round of golf at Fanling',zh:'粉嶺高爾夫',txt:'A senior Lands Department official mentions which sites are coming up, and that some bidders will be "less keen".',fx:()=>{s.flags.golf=1;return 'Rivals will bid 10% less against you until you next win a land sale.'}});}
+ // market and business events
+ if(s.devs.length&&y>=1980&&y<1992&&P(.08))ev.push({t:'Off-plan sales scandal',zh:'樓花風波',txt:'A rival developer sells the same flats twice and vanishes. Buyers now distrust every off-plan sale.',fx:()=>{s.devs.forEach(d=>d.spent*=.9);return 'Your developments are worth 10% less.'}});
+ if(y<1985&&s.props.some(p=>['flat','building'].includes(p.t))&&P(.05))ev.push({t:'Rent control tightened',zh:'租務管制',txt:'The government freezes rent rises on older residential flats.',fx:()=>{s.rc={from:y,to:y+1,types:['flat','building'],f:.85};return 'Residential rents are 15% lower for two years.'}});
+ if(s.devs.length&&P(.06))ev.push({t:'Construction strike',zh:'工人罷工',txt:'Bar-benders walk off the job across the territory. Cement deliveries stop.',fx:()=>{s.devs.forEach(d=>d.done++);return 'Every development you are building finishes a year late.'}});
+ if(y>=G(2009)&&y<G(2017)&&s.props.length&&P(.1)){const p=s.props.reduce((a,b)=>propVal(b)>propVal(a)?b:a),v=propVal(p);ev.push({t:'A mainland buyer comes calling',zh:'內地買家',txt:`A Shenzhen developer offers 20% over market for your ${PT[p.t].n} in ${DM[p.d].en}, cash, no questions asked.`,
+  choices:[{l:`Sell for ${money(v*1.2)}`,fx:()=>{if(!s.props.includes(p))return 'The buyer lost interest.';const co=isCo(p);sellFrac(p,1);s.cash+=v*.2;if(co)pco('out',v*.2);return 'Sold. The cash arrives from a Macau account.'}},{l:'Decline',fx:()=>''}]});}
+ if(eventsIn(y).some(e=>/Social unrest/.test(e.t))&&s.props.some(p=>p.t==='shop'))ev.push({t:'Shops shuttered',zh:'商舖停業',txt:'Tear gas in Causeway Bay and Mong Kok. Tourists stay away and your shop tenants ask for rent cuts.',fx:()=>{s.rc={from:y,to:y+1,types:['shop'],f:.6};return 'Shop rents are 40% lower for two years.'}});
  if(!s.title&&face()>=60){ev.push({t:y<1997?'Knighthood':'Grand Bauhinia Medal',zh:y<1997?'封爵':'大紫荊勳章',txt:y<1997?'Your name appears in the Queen\'s Birthday Honours list. Arise, Sir.':'The Chief Executive awards you the territory\'s highest honour.',fx:()=>{s.title=y<1997?'Sir':'GBM';return '+10 Reputation'}});}
  return ev;
 }
+/* ===== ACHIEVEMENTS: checked at the end of every year, kept with the save ===== */
+const debtNow=()=>s.props.reduce((a,p)=>a+p.loan,0)+s.devs.reduce((a,d)=>a+d.loan,0)+otherDebt();
+const ownsAll=r=>D.filter(d=>REGION(d.k)===r).every(d=>s.props.some(p=>p.d===d.k));
+const ACH=[
+ ['sir','🎩','Arise, Sir','Knighted before the Handover',()=>s.title==='Sir'],
+ ['gbm','🌺','Grand Bauhinia','Awarded the Grand Bauhinia Medal',()=>s.title==='GBM'],
+ ['derby','🏇','Derby Day','Won your Derby bet',()=>s.flags.derbyWon],
+ ['champ','🏆','Champion Owner','Your horses won 3 Group races',()=>(s.flags.gw||0)>=3],
+ ['m6','🎱','Mark Six Millionaire','Won the Mark Six jackpot',()=>s.flags.m6won],
+ ['kowloon','🏙️','King of Kowloon','Own property in every Kowloon district at once',()=>ownsAll('KL')],
+ ['island','🏝️','Island Lord','Own property in every Hong Kong Island district at once',()=>ownsAll('HK')],
+ ['bottom','📉','Bought the Bottom','Bought property in a crash year (1974, 1984, 2003 or 2009)',()=>s.flags.bottom],
+ ['s97','💀','Survived 1997','Borrowing over half your property value in 1997, and still standing in 1999',()=>s.flags.lev97&&s.year>=G(1999)],
+ ['debtfree','🧘','Debt-Free','Owned property with no borrowing for 20 years in a row',()=>(s.flags.df||0)>=20],
+ ['bell','🔔','Ring the Bell','Listed your company on the stock exchange',()=>s.ipo],
+ ['top','🥇','Top of the Rich List','Richest person in Hong Kong in any year',()=>richList()[0].me],
+ ['winner','🌏','Largest Tycoon','Richest person in Hong Kong in 2025',()=>s.year>=2025&&richList()[0].me],
+ ['misshk','💍','Miss Hong Kong','Married a Miss Hong Kong',()=>s.spouses.some(sp=>/Miss Hong Kong/.test(sp.src||''))],
+ ['phil','🏥','Philanthropist','Gave away HK$1 billion in total',()=>(s.flags.donated||0)>=1e9],
+ ['patri','🧓','Patriarch','Five children',()=>s.kids>=5],
+ ['tabloid','😬','Tabloid Fixture','Three scandals',()=>(s.flags.scandals||0)>=3],
+ ['clean','🚔','Clean Hands','Refused the tea money and never paid it',()=>s.flags.briAsk&&!s.flags.everBribed&&s.year>=G(1977)],
+ ['rags','🐉','Rags to Riches','Started as the office clerk and finished in the top 3',()=>s.origin==='office'&&s.year>=2025&&richList().findIndex(r=>r.me)<3],
+];
+function checkAch(){s.ach=s.ach||{};const y=s.year;
+ if(y===G(1997)){const pv=s.props.reduce((a,p)=>a+propVal(p),0);if(pv&&debtNow()>pv*.5)s.flags.lev97=1;}
+ s.flags.df=s.props.length&&debtNow()<=0?(s.flags.df||0)+1:0;
+ for(const [id,ic,n,d,f] of ACH)if(!s.ach[id]&&f()){s.ach[id]=y;notes.push(`🏆 <b>Achievement: ${ic} ${n}</b>. ${d}.`);log(`Achievement: ${n}`);}
+}
+function achTable(){const a=s.ach||{},got=ACH.filter(x=>a[x[0]]).length;
+ return `<h3>🏆 Achievements: ${got} of ${ACH.length}</h3><table>${ACH.map(([id,ic,n,d])=>`<tr class="${a[id]?'':'dim'}"><td>${a[id]?ic:'🔒'} <b>${n}</b><br><span class="dim">${d}</span></td><td class="n">${a[id]||''}</td></tr>`).join('')}</table>`}
 function pageantNow(){return s.pageant&&s.pageant.y===s.year&&!s.pageant.done?s.pageant:null}
 const courtOdds=()=>clamp(.05+face()/80,.05,.9), courtGift=()=>150e3*CPI(s.year);
 // the listed group goes to the buyer: company property, developments, businesses and the credit line leave with it
@@ -589,7 +658,7 @@ function simulate(){
  s.props.filter(p=>p.gradual>0).forEach(p=>{const v=sellFrac(p,1/p.gradual);p.gradual--;notes.push(`🏘️ Sold a tranche of flats at your ${DM[p.d].en} estate for ${money(v)}${p.gradual?` (${p.gradual} left)`:' (all sold)'}.`);});
  const y0=s.year,preP=new Map(s.props.map(p=>[p.id,propVal(p,y0)])),preB={},preU=s.units,preD=s.devs.reduce((a,d)=>a+devVal(d),0);for(const k in s.biz)preB[k]=bizVal(k,y0);
  const y=s.year+1;s.year=y;s.age++;const luck=s.luck||0;const L=[];
- let rent=0,coRent=0;s.props.forEach(p=>{const r=propVal(p,y)*rentYield(p.t,y,p.d);rent+=r;if(isCo(p))coRent+=r;});s.bought={};
+ let rent=0,coRent=0;s.props.forEach(p=>{const r=propVal(p,y)*rentYield(p.t,y,p.d)*(s.rc&&y>=s.rc.from&&y<=s.rc.to&&s.rc.types.includes(p.t)?s.rc.f:1);rent+=r;if(isCo(p))coRent+=r;});s.bought={};
  const hk=1-rentF(y),hold=rent*hk;rent-=hold;coRent*=1-hk;  // running costs and vacancy (Normal/Tycoon)
  let bizP=0;for(const k in s.biz){const b=s.biz[k];let m=bizMult(k,y)*(s.shock[k]??1);if(s.flags.bribed&&y<G(1977))m*=1.15;if(s.origin==='chiu'&&k==='trading')m*=1.25;if(k==='horse')continue;
   const pr=b.cReal*CPI(y)*BZ[k].roi*m*upgMult(b)*(.75+Math.random()*.5+luck);b.last=pr;b.earned=(b.earned||0)+pr;bizP+=pr;L.push([BZ[k].icon+' '+BZ[k].n,pr]);}
@@ -613,7 +682,7 @@ function simulate(){
  let dep=0;s.items.forEach(i=>{const d=i.val*IT[i.k].dep;dep+=d;i.val-=d;});
  if(married()&&s.kids<5&&s.age<62&&Math.random()<.3){s.kids++;notes.push(`👶 A child is born! You now have ${s.kids}.`);s.heirs=null;log('A child is born.');}
  // mortality from 55 onward (about 3% a year at 70, 9% at 77); succession is resolved after the report
- if(s.age>=55&&Math.random()<.004*Math.exp((s.age-55)/7)){s.pendingDeath=1;notes.push(`🕯️ <b>${s.name} has died at ${s.age}.</b>`);log(`${s.name} dies, aged ${s.age}.`);}
+ if(s.age>=55&&Math.random()<.004*Math.exp((s.age-55)/7)*(1+.5*(s.flags.ill||0))){s.pendingDeath=1;notes.push(`🕯️ <b>${s.name} has died at ${s.age}.</b>`);log(`${s.name} dies, aged ${s.age}.`);}
  s.shock={};
  // revaluations of assets held all year, measured before any forced sales
  let propRe=0;s.props.forEach(p=>{if(preP.has(p.id))propRe+=propVal(p,y)-preP.get(p.id)});
@@ -622,6 +691,7 @@ function simulate(){
  const stkRe=preU*(HSI[y]-HSI[y0]);
  marginCalls();
  if(s.cash<0)liquidate();
+ checkAch();
  genAuctions();
  const nw=netWorth();s.hist.push({y,nw});save();
  const snap=s._snap||{nw,nav:parts().nw},navChg=parts().nw-snap.nav;
@@ -692,7 +762,7 @@ function ending(note){
  const list=richList();const rank=list.findIndex(x=>x.me)+1;
  let h=`<div class="yr">${s.year} · FINAL RECKONING</div><h2>${s.title?s.title+' ':''}${s.name}</h2><p class="zh" style="font-size:18px">${nw>0&&best[1]>0?best[0]:'A modest life'}</p>${note?`<p>${note}</p>`:''}${s.generation>1?`<p class="dim">Generation ${s.generation} of the ${s.founder.split(' ')[0]} dynasty, founded by ${s.founder} in 1970.</p>`:''}`;
  h+=`<p>Net worth <b class="gold">${money(nw)}</b> (about ${money(nw/CPI(2025))} in 1970 dollars). You are <b>#${rank}</b> on the Pearl Rich List. Reputation ${face()}. ${s.spouses.length} spouse(s), ${s.kids} children.</p>`;
- h+=richTable(list)+timelineReveal()+`<div class="choices"><button class="primary" onclick="A.newGame()">Play again</button><button onclick="closeModal()">Look around</button></div>`;
+ h+=richTable(list)+achTable()+timelineReveal()+`<div class="choices"><button class="primary" onclick="A.newGame()">Play again</button><button onclick="closeModal()">Look around</button></div>`;
  log('Game over: '+money(nw));save();showModal(h);render();
 }
 function richList(){return [...RIVALS.map(r=>({n:r.n,co:r.co,nw:r.f(s.year)})),{n:(s.title?s.title+' ':'')+s.name,co:'You',nw:netWorth(),me:1}].sort((a,b)=>b.nw-a.nw)}
@@ -782,8 +852,8 @@ function placeTip(e){tip.style.display='block';tip.style.left=Math.min(innerWidt
 window.tipD=(k,e)=>{const d=DM[k],y=s.year;const lines=d.mtr.map(m=>`${m[1]} ${y>=m[0]?'✅':'('+m[0]+')'}`).join('<br>');
  tip.innerHTML=`<b>${d.en} ${d.zh}</b><br><span class="dim">${d.sp}</span><br>Includes ${AREAS[k]}<br>Population ${Math.round(popOf(d,y)/1000)}k (${Math.round((popOf(d,y)/popOf(d,Math.max(1970,y-10))-1)*100)}% vs 10 yrs ago)<br>Price ${perSqft(psf(k,y))} · 500 sq ft flat ${money(500*psf(k,y))}<br>Rent yield ${pc(rentYield('flat',y,d.k))}<br><span class="cyan">${lines||'No rail yet'}</span>`;placeTip(e);};
 window.tipS=(k,e)=>{const d=SPECIAL.find(x=>x.k===k);tip.innerHTML=`<b>${d.en} ${d.zh}</b><br>${d.sp}`;placeTip(e);};
-function renderTabs(){$('#tabs').innerHTML=['Map','District','Empire','Business','Forecast','Markets','Lifestyle','Rich List','Log'].map(t=>`<button class="${A.tab===t?'on':''}" onclick="A.setTab('${t}')">${t}${t==='District'&&s.auctions.length?` 🏗️${s.auctions.length}`:''}</button>`).join('');}
-function renderPanel(){const onMap=A.tab==='Map';$('#mapView').style.display=onMap?'':'none';$('#panelView').style.display=onMap?'none':'';if(onMap)return;hideTip();const f={District:pDistrict,Empire:pEmpire,Business:pBusiness,Forecast:pForecast,Markets:pMarkets,Lifestyle:pLifestyle,'Rich List':pRich,Log:pLog}[A.tab];$('#panel').innerHTML=f();}
+function renderTabs(){$('#tabs').innerHTML=['Map','District','Empire','Business','Forecast','Markets','Lifestyle','Trophies','Rich List','Log'].map(t=>`<button class="${A.tab===t?'on':''}" onclick="A.setTab('${t}')">${t}${t==='District'&&s.auctions.length?` 🏗️${s.auctions.length}`:''}</button>`).join('');}
+function renderPanel(){const onMap=A.tab==='Map';$('#mapView').style.display=onMap?'':'none';$('#panelView').style.display=onMap?'none':'';if(onMap)return;hideTip();const f={District:pDistrict,Empire:pEmpire,Business:pBusiness,Forecast:pForecast,Trophies:achTable,Markets:pMarkets,Lifestyle:pLifestyle,'Rich List':pRich,Log:pLog}[A.tab];$('#panel').innerHTML=f();}
 function landSaleLinks(close){return s.auctions.map(a=>`<a href="#" class="cyan" onclick="${close?'closeModal();':''}A.selectD('${a.d}');return false">${DM[a.d].en} (${a.sqft/1000}k sq ft)</a>`).join(', ')}
 function landSalesBar(){if(!s.auctions.length)return '';return `<div class="item" style="border-color:var(--gold)">🏗️ <b>${s.auctions.length} government land sale${s.auctions.length>1?'s':''} this year</b>, with rival developers bidding: ${landSaleLinks()}. Bidding closes when the year ends.</div>`}
 function pDistrict(){
