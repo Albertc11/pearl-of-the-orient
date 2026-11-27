@@ -6,7 +6,7 @@
 <title>Pearl of the Orient — Hong Kong Tycoon 1970–2025</title>
 <style>
 :root{--bg:#101318;--panel:#171b22;--panel2:#1e232c;--ink:#eef0f3;--dim:#8d95a3;--neon:#E2231A;--cyan:#5EB7E8;--gold:#ffc72c;--green:#3ddc84;--red:#ff5c5c;--line:#2b313c;
- --sea:#08141f;--offmap:#241a1c;--land0:#2a2f38;--border:#ffffff55;--halo:#101318d0;--bgGrad:linear-gradient(#14181f,#0b0d11);--hdr:rgba(16,19,24,.9);--tipBg:#14181ff2;--chart:#14181f}
+ --sea:#08141f;--offmap:#241a1c;--land0:#3a2e24;--border:#ffffff55;--halo:#101318d0;--bgGrad:linear-gradient(#14181f,#0b0d11);--hdr:rgba(16,19,24,.9);--tipBg:#14181ff2;--chart:#14181f}
 body.light{--bg:#f6f2ea;--panel:#ffffff;--panel2:#f3eee4;--ink:#1d2230;--dim:#6b7285;--neon:#c8161d;--cyan:#0067a8;--gold:#a86f00;--green:#1d8a4b;--red:#c62f2f;--line:#ddd4c3;
  --sea:#d4e6f1;--offmap:#f6e4ea;--land0:#ece6da;--border:#ffffffcc;--halo:#ffffffd8;--bgGrad:linear-gradient(#faf7f1,#efe9dd);--hdr:rgba(250,247,241,.92);--tipBg:#fffffff2;--chart:#f3eee4}
 *{box-sizing:border-box}
@@ -406,7 +406,7 @@ const EVENTS=[
  {y:1971,t:'Typhoon Rose: Signal No. 10',zh:'颱風露絲',txt:'One of the worst typhoons in years hits the colony. Ships run aground in the harbour.',fx:()=>typhoon(10)},
  {y:1972,t:'Cross-Harbour Tunnel opens',zh:'紅磡海底隧道通車',txt:'Kowloon and Hong Kong Island are joined by road at last. Share fever grips the city: amahs and taxi drivers are trading on four exchanges.',fx:()=>{s.shock.broker=1.6}},
  {y:1972,t:'Ten-Year Housing Programme',zh:'十年建屋計劃',txt:'Governor MacLehose pledges homes for 1.8 million people. New towns are planned at Sha Tin, Tuen Mun and Tsuen Wan. Watch their populations.'},
- {y:1973,t:'The 1973 Crash',zh:'七三股災',txt:'The Hang Seng peaked at 1,774 in March, then collapsed amid forged share certificates and the oil shock. It will bottom near 150 next year.',fx:()=>{s.shock.broker=.4}},
+ {y:1973,t:'The 1973 Crash',zh:'七三股災',txt:'The Hang Seng peaked at 1,774 in March, then collapsed amid forged share certificates and the oil shock.',fx:()=>{s.shock.broker=.4}},
  {y:1974,t:'ICAC established',zh:'廉政公署成立',txt:'An Independent Commission Against Corruption is set up after a police superintendent fled with millions. "Tea money" is now dangerous.',fx:()=>{if(s.flags.bribed&&Math.random()<.5){const l=Math.max(0,s.cash)*.25;s.cash-=l;s.faceBase-=15;s.flags.bribed=0;return `ICAC officers raid your office. You settle quietly: lost ${money(l)} and a lot of reputation.`}return s.flags.bribed?'The ICAC has not come for you. Yet.':''}},
  {y:1976,t:'Mark Six lottery launched',zh:'六合彩',txt:'The Royal Hong Kong Jockey Club launches Mark Six. Find it in Markets.'},
  {y:1977,t:'Police mutiny; partial amnesty',zh:'局部特赦',txt:'After police officers storm the ICAC offices, the Governor grants an amnesty for most corruption offences committed before 1977.',fx:()=>{if(s.flags.bribed){s.flags.bribed=0;return 'Your past "arrangements" are forgiven. You breathe again.'}return ''}},
@@ -448,7 +448,7 @@ const EVENTS=[
    {l:'Pass',fx:()=>'Others will get rich in Macau.'}]},
  {y:2002,t:'TKO Line opens',zh:'將軍澳綫通車',txt:'Tseung Kwan O new town is connected. Sai Kung district booms.'},
  {y:2003,t:'SARS',zh:'沙士',txt:'Amoy Gardens. 299 dead. Restaurants are empty and property is 62% below the 1997 peak. Distressed sellers everywhere: all property costs 20% less this year.',fx:()=>{s.flags.sars=1;s.shock.food=.3;s.shock.retail=.5;s.shock.film=.6}},
- {y:2003,t:'CEPA and the Individual Visit Scheme',zh:'自由行',txt:'Mainland tourists can now visit on their own. Canton Road will become the world\'s most expensive retail street. West Rail opens in December.'},
+ {y:2003,t:'CEPA and the Individual Visit Scheme',zh:'自由行',txt:'Mainland tourists can now visit on their own. Shoppers pour into Canton Road and Causeway Bay. West Rail opens in December.'},
  {y:2004,t:'Sands Macao opens',zh:'金沙開幕',txt:'Macau\'s first Las Vegas-style casino earns back its cost in a year.'},
  {y:2005,t:'Disneyland opens',zh:'迪士尼開幕',txt:'Hong Kong Disneyland opens on Lantau.'},
  {y:2007,t:'Through-train mania',zh:'港股直通車',txt:'Talk of mainland investors buying HK shares directly sends the Hang Seng past 31,000. Your private banker pitches "low-risk" Lehman Minibonds.',
@@ -646,7 +646,7 @@ function lensLabel(v){switch(A.lens){case'price':return '$'+(v>=1000?(v/1000).to
 // MTR colours. Price uses the network's line colours as bands, like station tiles: Tseung Kwan O purple (cheapest), Island blue,
 // Kwun Tong green, Tung Chung orange, Tsuen Wan red (dearest). Every other lens uses one line's colour from a muted tint to full
 // strength, so even the lowest band stands off the sea and the background.
-const MTR={tko:'#7D499D',isl:'#0075C2',ktl:'#00AB4E',tcl:'#F38B00',twl:'#E2231A'},PRICE_BANDS=[MTR.tko,MTR.isl,MTR.ktl,MTR.tcl,MTR.twl];
+const MTR={tko:'#7D499D',isl:'#0075C2',ktl:'#00AB4E',tcl:'#F38B00',twl:'#C8504A'},PRICE_BANDS=[MTR.tko,MTR.isl,MTR.ktl,MTR.tcl,MTR.twl];
 const LENS_HUE={pop:MTR.isl,growth:MTR.ktl,mtr:MTR.twl,mine:MTR.tcl},LENS_NOTE={price:'MTR line colours: purple = cheapest, then blue, green, orange, red = dearest',pop:'Island Line blue: pale = fewest people, full blue = most',growth:'Kwun Tong Line green: pale = slowest growth, full green = fastest',mine:'Tung Chung Line orange: pale = least, full orange = most of your money'};
 function mix(a,b,f){const h=c=>[1,3,5].map(i=>parseInt(c.slice(i,i+2),16)),x=h(a),y=h(b);return `rgb(${x.map((v,i)=>Math.round(v+(y[i]-v)*f)).join(',')})`}
 function color(t){const i=Math.min(4,Math.floor(clamp(t,0,1)*5));if(A.lens==='price')return PRICE_BANDS[i];
@@ -864,7 +864,7 @@ function renderTicker(){const ev=EVENTS.filter(e=>e.y===s.year).map(e=>`${e.zh} 
 
 /* ================= START / HELP ================= */
 A.newGame=()=>{
- showModal(`<div class="yr">1970 · BRITISH HONG KONG</div><h2>Pearl of the Orient <span class="zh">東方之珠</span></h2><p>It is 1970. You are 22, with a little money and big ambitions. The population is 3.9 million, a 500 sq ft flat in Kowloon costs about ${money(500*psf('KC',1970))}, and the Hang Seng stands at 211. You have 56 years to become a property tycoon, a banker, a casino king, or all three.</p>
+ showModal(`<div class="yr">1970 · BRITISH HONG KONG</div><h2>Pearl of the Orient <span class="zh">東方之珠</span></h2><p>It is 1970. You are 22, with a little money and big ambitions. The population is 3.9 million, a 500 sq ft flat in Kowloon costs about ${money(500*psf('KC',1970))}, and the Hang Seng stands at 211. You have 56 years to become the largest tycoon.</p>
  <p>Your name: <input type="text" id="nm" value="Wong Kar-fai" maxlength="30"></p><p>Your origins:</p><div class="choices">
  <button onclick="A.start('shanghai')">🧵 <b>Shanghainese mill heir</b>: own a garment factory, HK$120K cash</button>
  <button onclick="A.start('chiu')">🚢 <b>Chiu Chow trader's son</b>: HK$200K cash, +25% trading profits</button>
