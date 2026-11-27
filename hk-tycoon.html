@@ -190,9 +190,9 @@ const $=q=>document.querySelector(q);
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 function interp(kf,y){const ks=Object.keys(kf).map(Number).sort((a,b)=>a-b);if(y<=ks[0])return kf[ks[0]];if(y>=ks[ks.length-1])return kf[ks[ks.length-1]];for(let i=0;i<ks.length-1;i++){const a=ks[i],b=ks[i+1];if(y>=a&&y<=b)return kf[a]+(kf[b]-kf[a])*(y-a)/(b-a);}}
 const CPI=y=>interp(CPI_KF,y), PRIME=y=>interp(PRIME_KF,y);
-function regPsf(r,y){return y>=1986?REG_PSF[r][y]:REG_PSF[r][1986]*PPI[y]/PPI[1986]}
+function regPsf(r,y){return REG_PSF[r][y]!=null?REG_PSF[r][y]:REG_PSF[r][1986]*PPI[y]/PPI[1986]}
 function regYld(r,y){return REG_YLD[r][Math.max(1986,Math.min(2025,y))]}
-function LTV(y){return y<1991?.9:y<2009?.7:y<2024?.5:.7}
+function LTV(y){return y<1991?.9:y<G(2009)?.7:y<G(2024)?.5:.7}
 function mortRate(y){return Math.max(2,PRIME(y)+(y<2000?.5:-1.75))/100}
 // HK$ per US$, annual average. Linked rate 7.80 from 17 Oct 1983, so 1984+ uses 7.80. 1970-83 approximate.
 const FX={1970:6.06,1971:5.98,1972:5.64,1973:5.15,1974:4.91,1975:4.94,1976:4.90,1977:4.66,1978:4.68,1979:5.00,1980:4.98,1981:5.59,1982:6.07,1983:7.27};
@@ -209,6 +209,49 @@ function rel(k,y){const r=REGION(k),key=r+y;if(!relMean[key]){let n=0,dn=0;for(c
 // price/sq ft = official regional average x district premium within its region (district premium is a game estimate)
 function psf(k,y){return regPsf(REGION(k),y)*rel(k,y)}
 function totalPop(y){return D.reduce((a,d)=>a+popOf(d,y),0)}
+/* ===== SHUFFLED HISTORY (optional start) =====
+   Same events and the same yearly market moves, at different times. Years 1970, 1984 (Joint Declaration),
+   1997 (Handover) and 2025 stay put. Between them, blocks of real years move up to about 4 years and carry
+   their Hang Seng, property and interest-rate moves with them. Prices are re-chained from the yearly
+   changes, so 1970 to 2025 grows by the same total. Linked events (CHAINS) keep their order.
+   TLR[gameYear] = real year it plays; TLG[realYear] = game year it lands in. Both null in real history. */
+let TLR=null,TLG=null;
+const R=y=>TLR&&TLR[y]||y, G=x=>TLG&&TLG[x]||x;
+const TL_SEGS=[
+ {blocks:[[1971],[1972],[1973,1974],[1975],[1976],[1977],[1978],[1979],[1980],[1981,1982,1983]],chain:[1973,1977,1979,1980]},
+ {blocks:[[1985],[1986],[1987],[1988],[1989],[1990],[1991],[1992],[1993],[1994],[1995],[1996]],chain:[]},
+ {blocks:[[1998],[1999],[2000,2001],[2002],[2003],[2004],[2005],[2006],[2007,2008],[2009],[2010],[2011],[2012],[2013],[2014],[2015],[2016],[2017],[2018],[2019,2020,2021,2022,2023,2024]],
+  chain:[2002,2004,2007,2009,2010,2013,2014,2017,2019]}];
+// infrastructure and dated milestones happen in their real calendar year whatever the timeline
+const FIXED_EV=/Tunnel|Housing Programme|Mark Six|Racecourse|MTR opens|Chek Lap Kok|TKO Line|Disneyland|West Island|South Island|Handover|Joint Declaration|final year/;
+const evYear=e=>FIXED_EV.test(e.t)?e.y:G(e.y);
+const eventsIn=y=>EVENTS.filter(e=>evYear(e)===y);
+// redraw any timeline that moves a year more than 5 years, so shifts stay close to the advertised "up to about 4"
+function makeTimeline(){for(let t=0;t<200;t++){const o=drawTimeline();if(o.every((r,i)=>Math.abs(r-1970-i)<=5))return o;}return drawTimeline()}
+function drawTimeline(J=4){const order=[1970];
+ TL_SEGS.forEach((sg,i)=>{const B=sg.blocks.map(b=>({b,k:b[0]+(Math.random()*2-1)*J})).sort((a,c)=>a.k-c.k);
+  const pos=B.map((x,j)=>sg.chain.includes(x.b[0])?j:-1).filter(j=>j>=0);  // chain blocks keep their real order
+  const ch=sg.chain.map(y=>B.find(x=>x.b[0]===y));pos.forEach((p,j)=>B[p]=ch[j]);
+  B.forEach(x=>order.push(...x.b));order.push([1984,1997,2025][i]);});
+ return order}  // order[i] = real year played in game year 1970+i
+const TL0={HSI:{...HSI},PPI:{...PPI},PRIME:{...PRIME_KF},FX:{...FX},PSF:JSON.parse(JSON.stringify(REG_PSF)),YLD:JSON.parse(JSON.stringify(REG_YLD))};
+function applyTimeline(tl){
+ const put=(T,src)=>{for(const k in T)delete T[k];Object.assign(T,src)};
+ put(HSI,TL0.HSI);put(PPI,TL0.PPI);put(PRIME_KF,TL0.PRIME);put(FX,TL0.FX);
+ for(const r in REG_PSF){put(REG_PSF[r],TL0.PSF[r]);put(REG_YLD[r],TL0.YLD[r]);}
+ for(const k in relMean)delete relMean[k];
+ if(!tl){TLR=TLG=null;return;}
+ TLR={};TLG={};tl.forEach((r,i)=>{TLR[1970+i]=r;TLG[r]=1970+i;});
+ const P0=(r,y)=>y>=1986?TL0.PSF[r][y]:TL0.PSF[r][1986]*TL0.PPI[y]/TL0.PPI[1986];
+ for(let g=1971;g<=2025;g++){const r=TLR[g];
+  HSI[g]=HSI[g-1]*TL0.HSI[r]/TL0.HSI[r-1];PPI[g]=+(PPI[g-1]*TL0.PPI[r]/TL0.PPI[r-1]).toFixed(1);
+  PRIME_KF[g]=TL0.PRIME[r];if(g<=1983)FX[g]=TL0.FX[r];
+  for(const k in REG_PSF){REG_PSF[k][g]=(g===1971?P0(k,1970):REG_PSF[k][g-1])*P0(k,r)/P0(k,r-1);
+   if(g>=1986)REG_YLD[k][g]=TL0.YLD[k][Math.max(1986,r)];}}
+ for(const k in REG_PSF)REG_PSF[k][1970]=P0(k,1970);
+ for(let g=1971;g<=2025;g++)HSI[g]=Math.round(HSI[g]*100)/100;}
+function timelineReveal(){if(!TLR)return '';const L=EVENTS.filter(e=>!FIXED_EV.test(e.t)&&G(e.y)!==e.y&&!/matchmaker/i.test(e.t));
+ return `<h3>🔀 Your shuffled history</h3><table>${L.map(e=>`<tr><td>${e.t}</td><td class="n">${e.y} → <b>${G(e.y)}</b></td></tr>`).join('')}</table>`}
 
 /* ================= STATE ================= */
 let s=null;
@@ -225,7 +268,7 @@ function freshState(name,origin){
 // Each game is saved under its own key (hkt_g_<id>) with a small summary (hkt_m_<id>) for the Games list.
 const SK='hkt_g_',MK='hkt_m_',newId=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,5);
 function save(){try{if(!s.id)s.id=newId();localStorage.setItem(SK+s.id,JSON.stringify(s));
- localStorage.setItem(MK+s.id,JSON.stringify({n:s.label||s.name,o:s.origin,y:s.year,nw:netWorth(),over:s.over||'',t:Date.now()}));
+ localStorage.setItem(MK+s.id,JSON.stringify({n:s.label||s.name,sh:s.tl?1:0,o:s.origin,y:s.year,nw:netWorth(),over:s.over||'',t:Date.now()}));
  localStorage.setItem('hkt_cur',s.id);localStorage.removeItem('hktycoon');}  // old single-slot save, now moved
  catch(e){if(!save.warned&&typeof alert==='function'){save.warned=1;alert('Could not save the game: browser storage is full. Delete old games from the Games menu.');}}}
 function savedGames(){const r=[];try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith(MK))r.push({id:k.slice(MK.length),...JSON.parse(localStorage.getItem(k))});}}catch(e){}return r.sort((a,b)=>b.t-a.t)}
@@ -240,7 +283,7 @@ function log(t){s.log.unshift({y:s.year,t});if(s.log.length>300)s.log.pop();}
 /* ================= VALUATION ================= */
 function propVal(p,y=s.year){return p.sqft*psf(p.d,y)*PT[p.t].prem}
 function rentYield(t,y,k){return Math.max(.005,regYld(k?REGION(k):'KL',y)+PT[t].yAdd)}
-function bizMult(k,y){const b=BZ[k];if(b.dyn){const r=HSI[y]/HSI[y-1]-1;return clamp(.5+3*r,-.5,3.5);}return interp(b.fac&&s.flags.reloc?b.kf2:b.kf,y)}
+function bizMult(k,y){const b=BZ[k];if(b.dyn){const r=HSI[y]/HSI[y-1]-1;return clamp(.5+3*r,-.5,3.5);}return interp(b.fac&&s.flags.reloc?b.kf2:b.kf,R(y))}
 function bizVal(k,y=s.year){const b=s.biz[k];const m=BZ[k].dyn?1:bizMult(k,y);return b.cReal*CPI(y)*clamp(m,.15,4)*upgMult(b)}
 function devVal(d){return d.spent*(PPI[s.year]/PPI[d.y])*(1-(d.presold||0))}  // pre-sold share already belongs to buyers
 function itemsVal(){return s.items.reduce((a,i)=>a+i.val,0)}
@@ -311,11 +354,11 @@ A.pledgeRepay=()=>{const amt=Math.min(Math.max(0,s.cash),s.pledge||0);s.pledge-=
 function ownsResidential(){return s.props.some(p=>['flat','mansion','estate','building'].includes(p.t))}
 function buyCost(k,t){
  const p={d:k,t,sqft:PT[t].sqft};let price=propVal(p);if(s.flags.sars)price*=.8;
- let duty=.03;if(s.year>=2013&&s.year<2024&&ownsResidential())duty=.15;
+ let duty=.03;if(s.year>=G(2013)&&s.year<G(2024)&&ownsResidential())duty=.15;
  const loan=A.useLoan?price*LTV(s.year):0;return {price,duty:price*duty,loan,need:price-loan+price*duty};
 }
 A.buyProp=(k,t)=>{const c=buyCost(k,t);if(s.cash<c.need)return toast('Not enough cash');const own=A.buyFor==='me'?'me':'co';s.cash-=c.need;if(own==='co')pco('inv',c.need);s.props.push({id:uid(),d:k,t,sqft:PT[t].sqft,cost:c.price,loan:c.loan,yb:s.year,own});log(`Bought ${PT[t].n} in ${DM[k].en} ${own==='co'?'for '+propName():'personally'} for ${money(c.price)}${c.loan?` (mortgage ${money(c.loan)})`:''}`);render();};
-function ssd(p){if(s.year>=2010&&s.year<2024&&s.year-p.yb<=2)return .15;return 0}
+function ssd(p){if(s.year>=G(2010)&&s.year<G(2024)&&s.year-p.yb<=2)return .15;return 0}
 function sellFrac(p,frac){const v=propVal(p)*frac,l=p.loan*frac,fee=v*(.01+ssd(p));s.cash+=v-l-fee;if(isCo(p))pco('out',v-l-fee);log(`Sold ${frac<1?Math.round(frac*100)+'% of ':''}${PT[p.t].n} in ${DM[p.d].en} for ${money(v)}${ssd(p)?' (paid Special Stamp Duty)':''}`);if(frac>=1)s.props=s.props.filter(x=>x!==p);else{p.sqft*=1-frac;p.loan-=l;p.cost*=1-frac;}return v}
 A.sellProp=(id,frac=1)=>{const p=s.props.find(x=>x.id===id);if(!p)return;sellFrac(p,frac);render();};
 A.repay=id=>{const p=s.props.find(x=>x.id===id);const r=Math.min(Math.max(0,s.cash),p.loan);p.loan-=r;s.cash-=r;if(isCo(p))pco('inv',r);render();};
@@ -472,8 +515,8 @@ const EVENTS=[
  {y:2025,t:'The final year',zh:'最後一年',txt:'Fifty-five years since you started out. Make your final moves. After this year, your legacy is judged.'},
 ];
 function randomEvents(y){
- const ev=[];const fixedTyphoon=EVENTS.some(e=>e.y===y&&/Typhoon/.test(e.t));
- if(y<=1973&&!s.flags.briAsk&&Object.keys(s.biz).length&&Math.random()<.5){s.flags.briAsk=1;ev.push({t:'A friendly police sergeant',zh:'茶錢',txt:'"Inspectors can be very slow, Boss. A small monthly arrangement keeps things smooth." Everyone does it, they say.',
+ const ev=[];const fixedTyphoon=eventsIn(y).some(e=>/Typhoon/.test(e.t));
+ if(y<G(1974)&&!s.flags.briAsk&&Object.keys(s.biz).length&&Math.random()<.5){s.flags.briAsk=1;ev.push({t:'A friendly police sergeant',zh:'茶錢',txt:'"Inspectors can be very slow, Boss. A small monthly arrangement keeps things smooth." Everyone does it, they say.',
   choices:[{l:`Pay the "tea money" (${money(15e3*CPI(y))}/yr equivalent, +15% business profit)`,ok:()=>s.cash>=15e3*CPI(y),fx:()=>{s.cash-=15e3*CPI(y);s.flags.bribed=1;return 'Inspections become strangely rare.'}},{l:'Refuse',fx:()=>{Object.keys(s.biz).forEach(k=>s.shock[k]=.9);return 'Your licences take months to renew. Business -10% this year.'}}]});}
  if((y===1975||y===1976)&&s.flags.bribed&&Math.random()<.3)ev.push({t:'ICAC investigation',zh:'廉署調查',txt:'Two polite officers ask about payments to a police syndicate.',fx:()=>{const l=Math.max(0,s.cash)*.25;s.cash-=l;s.faceBase-=15;s.flags.bribed=0;return `You settle. Lost ${money(l)}.`}});
  if(!fixedTyphoon&&Math.random()<.35)ev.push({t:'Typhoon Signal No. 8',zh:'八號風球',txt:'The city shuts down for a day and a half. Mahjong tables everywhere.',fx:()=>typhoon(8)});
@@ -502,7 +545,7 @@ A.advance=()=>{
  if(s.pendingDeath)return successionModal('death');
  const y=s.year+1;s.flags.sars=0;s.flags.derby=0;s.flags.m6=0;notes=[];
  s._snap={nw:netWorth(),nav:parts().nw};  // baseline for "why did my net worth change"
- queue=[...EVENTS.filter(e=>e.y===y),...randomEvents(y)];
+ queue=[...eventsIn(y),...randomEvents(y)];
  nextEvent();
 };
 function nextEvent(){
@@ -524,7 +567,7 @@ function simulate(){
  const y0=s.year,preP=new Map(s.props.map(p=>[p.id,propVal(p,y0)])),preB={},preU=s.units,preD=s.devs.reduce((a,d)=>a+devVal(d),0);for(const k in s.biz)preB[k]=bizVal(k,y0);
  const y=s.year+1;s.year=y;s.age++;const luck=s.luck||0;const L=[];
  let rent=0,coRent=0;s.props.forEach(p=>{const r=propVal(p,y)*rentYield(p.t,y,p.d);rent+=r;if(isCo(p))coRent+=r;});
- let bizP=0;for(const k in s.biz){const b=s.biz[k];let m=bizMult(k,y)*(s.shock[k]??1);if(s.flags.bribed&&y<1977)m*=1.15;if(s.origin==='chiu'&&k==='trading')m*=1.25;if(k==='horse')continue;
+ let bizP=0;for(const k in s.biz){const b=s.biz[k];let m=bizMult(k,y)*(s.shock[k]??1);if(s.flags.bribed&&y<G(1977))m*=1.15;if(s.origin==='chiu'&&k==='trading')m*=1.25;if(k==='horse')continue;
   const pr=b.cReal*CPI(y)*BZ[k].roi*m*upgMult(b)*(.75+Math.random()*.5+luck);b.last=pr;b.earned=(b.earned||0)+pr;bizP+=pr;L.push([BZ[k].icon+' '+BZ[k].n,pr]);}
  const div=s.units*HSI[y]*.035;
  let horse=0;s.items.forEach(i=>{if(i.k==='horse')horse+=i.cost*(Math.random()*.5-.12)*(y>=1978?1.4:1)});
@@ -625,7 +668,7 @@ function ending(note){
  const list=richList();const rank=list.findIndex(x=>x.me)+1;
  let h=`<div class="yr">${s.year} · FINAL RECKONING</div><h2>${s.title?s.title+' ':''}${s.name}</h2><p class="zh" style="font-size:18px">${nw>0&&best[1]>0?best[0]:'A modest life'}</p>${note?`<p>${note}</p>`:''}${s.generation>1?`<p class="dim">Generation ${s.generation} of the ${s.founder.split(' ')[0]} dynasty, founded by ${s.founder} in 1970.</p>`:''}`;
  h+=`<p>Net worth <b class="gold">${money(nw)}</b> (about ${money(nw/CPI(2025))} in 1970 dollars). You are <b>#${rank}</b> on the Pearl Rich List. Reputation ${face()}. ${s.spouses.length} spouse(s), ${s.kids} children.</p>`;
- h+=richTable(list)+`<div class="choices"><button class="primary" onclick="A.newGame()">Play again</button><button onclick="closeModal()">Look around</button></div>`;
+ h+=richTable(list)+timelineReveal()+`<div class="choices"><button class="primary" onclick="A.newGame()">Play again</button><button onclick="closeModal()">Look around</button></div>`;
  log('Game over: '+money(nw));save();showModal(h);render();
 }
 function richList(){return [...RIVALS.map(r=>({n:r.n,co:r.co,nw:r.f(s.year)})),{n:(s.title?s.title+' ':'')+s.name,co:'You',nw:netWorth(),me:1}].sort((a,b)=>b.nw-a.nw)}
@@ -698,7 +741,7 @@ function renderMap(){
  const vals=D.map(d=>lensVal(d,y));const mn=Math.min(...vals),mx=Math.max(...vals);
  const vb=mapVB();$('#map').setAttribute('viewBox',vb.join(' '));
  let g='';
- const box=(k,x,yy,w,h,extra)=>{const d=SPECIAL.find(z=>z.k===k);const on=k==='SZ'?y>=1980:true;return `<g class="dist" onmouseenter="tipS('${k}',event)" onmouseleave="hideTip()"><rect x="${x}" y="${yy}" width="${w}" height="${h}" rx="6" fill="var(--offmap)" stroke="var(--neon)" stroke-opacity=".5" stroke-dasharray="4 3"/><text class="lbl" x="${x+w/2}" y="${yy+h/2+4}" text-anchor="middle" font-size="12" fill="${on?'var(--ink)':'var(--dim)'}">${d.zh} ${d.en}${k==='SZ'&&y<1980?' (closed)':''}${extra||''}</text></g>`};
+ const box=(k,x,yy,w,h,extra)=>{const d=SPECIAL.find(z=>z.k===k);const on=k==='SZ'?y>=G(1980):true;return `<g class="dist" onmouseenter="tipS('${k}',event)" onmouseleave="hideTip()"><rect x="${x}" y="${yy}" width="${w}" height="${h}" rx="6" fill="var(--offmap)" stroke="var(--neon)" stroke-opacity=".5" stroke-dasharray="4 3"/><text class="lbl" x="${x+w/2}" y="${yy+h/2+4}" text-anchor="middle" font-size="12" fill="${on?'var(--ink)':'var(--dim)'}">${d.zh} ${d.en}${k==='SZ'&&y<G(1980)?' (closed)':''}${extra||''}</text></g>`};
  g+=box('SZ',150,-top+4,330,24)+box('MO',6,MAP_H-40,118,30,' 🎰');
  const shapes=()=>D.map((d,i)=>{const t=mx>mn?(vals[i]-mn)/(mx-mn):0;const fill=A.lens==='mine'&&!vals[i]?'var(--land0)':color(t);
   return `<path class="dist ${A.selD===d.k?'sel':''}" d="${MAP_PATHS[d.k].d}" fill="${fill}" stroke="var(--border)" stroke-width=".8" vector-effect="non-scaling-stroke" onclick="A.selectD('${d.k}')" onmousemove="tipD('${d.k}',event)" onmouseleave="hideTip()"/>`;}).join('');
@@ -764,7 +807,7 @@ function forecast(n=3){const y=s.year,rate=mortRate(y),luck=s.luck||0,out=[];let
   s.props.forEach(p=>{const v=propVal(p,y)*rentYield(p.t,y,p.d);if(isCo(p)){coRent+=v;coInt+=p.loan*rate}else{pRent+=v;pInt+=p.loan*rate}});
   devs.forEach(d=>coInt+=d.loan*rate);  // land loans stay on the estate once it is finished
   let bizP=0;for(const k in s.biz){if(k==='horse')continue;const b=s.biz[k];let m=bizMult(k,y)*(i===1?(s.shock[k]??1):1);
-   if(s.flags.bribed&&yr<1977)m*=1.15;if(s.origin==='chiu'&&k==='trading')m*=1.25;
+   if(s.flags.bribed&&yr<G(1977))m*=1.15;if(s.origin==='chiu'&&k==='trading')m*=1.25;
    const pr=b.cReal*CPI(y)*BZ[k].roi*m*upgMult(b)*(1+luck);bizP+=pr;C(BZ[k].icon+' '+BZ[k].n,pr);}
   C('Rent from company property',coRent);P('Rent from personal property',pRent);
   P('Hang Seng dividends',s.units*HSI[y]*.035);
@@ -802,14 +845,14 @@ function pBusiness(){
  const mood=hsiMood(y);
  if(s.ipo)h+=`<div class="item"><div class="t">📈 ${groupName()} <span class="pill">listed ${s.ipo.y}</span></div><div class="dim">Market cap ${money(mcap())} (${mood.toFixed(2)}× net assets) · you own ${Math.round(s.ipo.own*100)}% · outside shareholders get 40% of profits × their share as dividends</div><div class="row"><button class="sm" ${s.ipo.own>=.45?'':'disabled'} onclick="A.placement()">Sell 10% more shares (+${money(.1*mcap())})</button><button class="sm" ${s.cash>=privCost()?'':'disabled'} onclick="A.privatise()">Take private (${money(privCost())}, 30% premium)</button></div></div>`;
  else h+=`<div class="item"><div class="t">📈 List ${groupName()} on the stock exchange</div><div class="dim">Sell 25% of the company (${propName()}'s properties and developments plus your businesses) to the public for about ${money(.25*mcap())}. Personal property, cash and stocks are not included. Shares are priced at ${mood.toFixed(2)}× net assets: high when the Hang Seng is above its 5-year average, low after crashes. Once listed, your net worth is your stake × market cap plus your personal assets. Needs company net assets of ${money(IPO_NAV*CPI(y))} and Reputation ${IPO_FACE}.</div><div class="row"><button class="sm" ${ipoOk()?'':'disabled'} onclick="A.ipo()">List now</button></div></div>`;
- if(factoryCap()>0&&y>=1980&&!s.flags.reloc)h+=`<div class="item">🏭 <b>Relocate factories to Shenzhen</b>: ${money(factoryCap()*.3)}. Keeps manufacturing profitable after HK wages rise. <button class="sm" onclick="A.relocate()">Relocate</button></div>`;
+ if(factoryCap()>0&&y>=G(1980)&&!s.flags.reloc)h+=`<div class="item">🏭 <b>Relocate factories to Shenzhen</b>: ${money(factoryCap()*.3)}. Keeps manufacturing profitable after HK wages rise. <button class="sm" onclick="A.relocate()">Relocate</button></div>`;
  {const coP=s.props.filter(isCo),val=coP.reduce((a,p)=>a+propVal(p),0),debt=coP.reduce((a,p)=>a+p.loan,0)+s.devs.reduce((a,d)=>a+d.loan,0),
   rent=coP.reduce((a,p)=>a+propVal(p)*rentYield(p.t,s.year,p.d),0),eq=coPropEquity(),P=s.pco||{inv:0,out:0},gain=eq+P.out-P.inv;
   h+=`<div class="item"><div class="t">🏢 ${propName()} <span class="zh" style="color:var(--neon)">地產</span> <span class="pill">property company</span></div>
   <div class="dim">${coP.length} properties worth ${money(val)} · ${s.devs.length} under construction (${money(s.devs.reduce((a,d)=>a+devVal(d),0))}) · mortgages and land loans ${money(debt)} · rent ${money(rent)}/yr. Buy for the company from the District tab; land sale developments always go here.${s.ipo?' This is the core of the listed group.':''}</div>
   ${P.inv||P.out?`<div class="row"><span>Lifetime: put in <b>${money(P.inv)}</b> · taken out <b>${money(P.out)}</b> (rent after interest, sales, pre-sales, remortgages) · equity now <b>${money(eq)}</b> · ${gain>=0?'gain':'loss'} <b class="${gain>=0?'pos':'neg'}">${money(Math.abs(gain))}</b>${P.est?' · <i>estimated: this save started before tracking</i>':''}</span></div>`:''}
   <div class="row"><button class="sm" onclick="A.setTab('Map')">Find property on the map</button><button class="sm" onclick="A.setTab('Empire')">Manage holdings</button></div></div>`;}
- for(const [k,b] of Object.entries(BZ)){const own=s.biz[k];const avail=y>=b.from&&(!b.to||y<b.to);if(!own&&(!avail||b.special))continue;
+ for(const [k,b] of Object.entries(BZ)){const own=s.biz[k];const avail=y>=G(b.from)&&(!b.to||y<G(b.to));if(!own&&(!avail||b.special))continue;
   const m=bizMult(k,y);const out=b.dyn?'tracks the stock market':m>2?'▲▲▲ boom':m>1.2?'▲▲ strong':m>.8?'▲ steady':m>.4?'▼ weak':'▼▼ dying';
   let req='';if(!own&&b.req){const nwReq=b.req.nw*CPI(y);if(face()<b.req.face||netWorth()<nwReq)req=`Needs Reputation ${b.req.face}${nwReq?' and net worth '+money(nwReq):''}`;}
   h+=`<div class="item"><div class="t">${b.icon} ${b.n} <span class="zh" style="color:var(--neon)">${b.zh}</span> <span class="pill">${out}</span></div>`;
@@ -823,7 +866,7 @@ function pBusiness(){
    <div class="row">🏦 Business loan ${money(own.loan||0)} @ ${pc(loanRate(y))} · <button class="sm" ${bizVal(k)*BIZ_LTV>(own.loan||0)?'':'disabled'} onclick="A.bizBorrow('${k}')">Borrow against it (+${money(Math.max(0,bizVal(k)*BIZ_LTV-(own.loan||0)))})</button><button class="sm" ${own.loan&&s.cash>0?'':'disabled'} onclick="A.bizRepay('${k}')">Repay</button></div>`;}
   else{const c=b.cost*CPI(y);h+=`<div class="row"><button class="sm" ${s.cash>=c&&!req?'':'disabled'} onclick="A.buyBiz('${k}')">Start for ${money(c)}</button><span class="dim">${req}</span></div>`;}
   h+='</div>';}
- if(!s.biz.casino&&y<2002)h+=`<p class="dim">🎰 Macau casino concessions open in 2002. You'll need net worth and Reputation.</p>`;
+ if(!s.biz.casino&&y<G(2002))h+=`<p class="dim">🎰 Macau casino concessions open in 2002. You'll need net worth and Reputation.</p>`;
  return h;
 }
 function spark(arr,w=430,hgt=90,logS=true){const v=arr.map(a=>logS?Math.log(Math.max(1,a[1])):a[1]);const mn=Math.min(...v),mx=Math.max(...v);const pts=v.map((x,i)=>`${(i/(Math.max(1,v.length-1)))*w},${hgt-((x-mn)/(mx-mn||1))*(hgt-10)-5}`).join(' ');return `<svg viewBox="0 0 ${w} ${hgt}" style="width:100%;height:${hgt}px;background:var(--chart);border-radius:6px"><polyline points="${pts}" fill="none" stroke="var(--cyan)" stroke-width="2"/><text x="4" y="12" fill="var(--dim)" font-size="10">${arr[0][0]}</text><text x="${w-4}" y="12" fill="var(--dim)" font-size="10" text-anchor="end">${arr[arr.length-1][0]}</text></svg>`}
@@ -859,30 +902,30 @@ function pLifestyle(){
 }
 function pRich(){return `<h3>Pearl Rich List ${s.year}<span class="zh">富豪榜</span></h3>${richTable(richList())}<h3>Your net worth (log scale)</h3>${s.hist.length>1?spark(s.hist.map(x=>[x.y,Math.max(1,x.nw)])):'<p class="dim">Play a few years.</p>'}<p class="dim">Rivals are fictional. Their fortunes follow the property index, the Hang Seng, shipping and textiles.</p>`}
 function pLog(){return '<h3>Chronicle<span class="zh">大事記</span></h3>'+(s.log.map(l=>`<div><span class="cyan">${l.y}</span> ${l.t}</div>`).join('')||'<p class="dim">Nothing yet.</p>')}
-function renderTicker(){const ev=EVENTS.filter(e=>e.y===s.year).map(e=>`${e.zh} ${e.t}`);const d=[...D].sort((a,b)=>(popOf(b,s.year)/popOf(b,Math.max(1970,s.year-5)))-(popOf(a,s.year)/popOf(a,Math.max(1970,s.year-5))))[0];
+function renderTicker(){const ev=eventsIn(s.year).map(e=>`${e.zh} ${e.t}`);const d=[...D].sort((a,b)=>(popOf(b,s.year)/popOf(b,Math.max(1970,s.year-5)))-(popOf(a,s.year)/popOf(a,Math.max(1970,s.year-5))))[0];
  $('#tickerText').textContent=`${s.year}  ✦  ${ev.join('  ✦  ')||'Business as usual in the Fragrant Harbour'}  ✦  Fastest-growing district: ${d.en} ${d.zh}  ✦  HSI ${HSI[s.year].toLocaleString()}  ✦  Prime ${PRIME(s.year).toFixed(2)}%  ✦  Population ${(totalPop(s.year)/1e6).toFixed(2)}M  ✦  ${s.auctions.length} government land sales this year${s.pageant&&s.pageant.y===s.year?`  ✦  Miss Hong Kong ${s.year}: ${s.pageant.name}`:''}`;}
 
 /* ================= START / HELP ================= */
 A.newGame=()=>{
  showModal(`<div class="yr">1970 · BRITISH HONG KONG</div><h2>Pearl of the Orient <span class="zh">東方之珠</span></h2><p>It is 1970. You are 22, with a little money and big ambitions. The population is 3.9 million, a 500 sq ft flat in Kowloon costs about ${money(500*psf('KC',1970))}, and the Hang Seng stands at 211. You have 56 years to become the largest tycoon.</p>
- <p>Your name: <input type="text" id="nm" value="Wong Kar-fai" maxlength="30"></p><p>Your origins:</p><div class="choices">
+ <p>Your name: <input type="text" id="nm" value="Wong Kar-fai" maxlength="30"></p><p><label class="chk"><input type="checkbox" id="shuf"> 🔀 <b>Shuffled history</b>: the same events and market swings, but at different times (each moves up to about 4 years). The Joint Declaration and the Handover keep their dates, and MTR lines open on schedule. The real dates are revealed at the end.</label></p><p>Your origins:</p><div class="choices">
  <button onclick="A.start('shanghai')">🧵 <b>Shanghainese mill heir</b>: own a garment factory, HK$120K cash</button>
  <button onclick="A.start('chiu')">🚢 <b>Chiu Chow trader's son</b>: HK$200K cash, +25% trading profits</button>
  <button onclick="A.start('office')">💼 <b>Central office clerk</b>: HK$40K savings, a steady salary that rises each year, higher living costs, and a bank loan line of up to 3× salary while you keep the job</button></div>`);
 };
-A.start=o=>{const n=(($('#nm')||{}).value||'Wong Kar-fai').trim();s=freshState(n,o);genAuctions();s.hist.push({y:1970,nw:netWorth()});log(`${n} sets out to conquer Hong Kong.`);A.selD=null;A.tab='Map';save();closeModal();render();};
+A.start=o=>{const n=(($('#nm')||{}).value||'Wong Kar-fai').trim();s=freshState(n,o);s.tl=($('#shuf')||{}).checked?makeTimeline():null;applyTimeline(s.tl);genAuctions();s.hist.push({y:1970,nw:netWorth()});log(`${n} sets out to conquer Hong Kong.`);A.selD=null;A.tab='Map';save();closeModal();render();};
 A.help=()=>showModal(`<h2>Sources & notes</h2><p>The idea comes from Karpathy's Civ-style map of US public data. Every series below was downloaded from an official or published source unless marked <b>estimated</b>:</p><ul>
 <li><b>District populations — official C&SD counts</b>: 1981 Census District Board Tabulations (domestic-household persons, scaled to the 5,109,812 territory total; Mong Kok + Yau Ma Tei merged into Yau Tsim Mong; Tsuen Wan split into Tsuen Wan / Kwai Tsing by their 1991 ratio, since Kwai Tsing became a district in 1985); 1991, 1996, 2001 (2001 Census Table 1); 2011, 2016, 2021 (2021 Census Main Results Table 3.20). <b>1971 is estimated</b>: districts did not exist yet, so it is back-projected and scaled to the official 1971 total of 3,936,630.</li>
 <li><b>Property prices</b>: Rating & Valuation Department private domestic price index (all classes, 1999=100), official 1980–2025; <b>1970–79 estimated</b>. Absolute prices per sq ft and gross rental yields use RVD class B (40–69.9 m²) average prices and rents for Hong Kong Island, Kowloon and the New Territories, 1986–2025. Before 1986 prices follow the index and yields use the 1986 levels (estimated). The premium of each district within its region is a game estimate driven by census population growth and MTR openings.</li><li><b>Hang Seng Index</b>: year-end closes 1970–2025 (Hang Seng Indexes Co. via Wikipedia, checked against Yahoo Finance from 1986).</li><li><b>Interest rates</b>: HKMA best lending rate (HSBC), annual averages 1971–2025; 1970 assumed 8%. Mortgage rate in game = BLR + 0.5% before 2000, BLR − 1.75% after.</li><li><b>Listing your group</b>: share price = net assets × market mood, where mood = Hang Seng close ÷ its 5-year average (real index data), capped at 0.5–1.6, × 0.85. The formula itself is a game rule.</li><li><b>US$ display</b>: values converted at each year's HK$ per US$ rate; 7.80 from 1984 (linked rate since October 1983); <b>1970–83 approximate</b>.</li><li><b>Inflation</b>: C&SD Composite CPI from 1981, chained to CPI(A) 1975–80; <b>1970–74 estimated</b>. Used for business costs, wages and prices of goods.</li>
 <li>MTR/KCR opening years; LTV caps (HKMA 70% from 1991, tighter 2009–2024); SSD/DSD stamp duties</li>
-<li>Events are real history. People, tycoons and Miss Hong Kong winners in the game are fictional.</li></ul>
+<li><b>Shuffled history</b> (optional start): blocks of real years swap places within 1971–83, 1985–96 and 1998–2024, carrying their events, Hang Seng and property changes and interest rates. Prices are rebuilt from the yearly changes, so total growth is the same; Hang Seng levels quoted in event text are the real ones.</li><li>Events are real history. People, tycoons and Miss Hong Kong winners in the game are fictional.</li></ul>
 <p class="dim">Not yet from data: business profitability by era, LTV caps and stamp duties (rule summaries), typhoon timing, and district premiums within each region.</p><div class="choices"><button onclick="closeModal()">Close</button></div>`);
 /* ===== GAMES MENU: several saved games, copies, file backup ===== */
 const ORIGIN={shanghai:'🧵',chiu:'🚢',street:'🥢',office:'💼'};
-function useGame(g){s=g;if(s.auctions&&s.auctions.some(a=>!a.rivals))genAuctions();  // saves from before rival bidding
+function useGame(g){s=g;applyTimeline(s.tl);if(s.auctions&&s.auctions.some(a=>!a.rivals))genAuctions();  // saves from before rival bidding
  A.selD=null;A.tab='Map';save();closeModal();render();}
 A.games=()=>{save();const L=savedGames();let h=`<h2>Manage saves</h2><p class="dim">Games save automatically after every action, in this browser only. Export a file to back one up or move it to another device.</p><table style="width:100%">`;
- for(const g of L){const cur=g.id===s.id;h+=`<tr><td>${ORIGIN[g.o]||''} <b>${g.n}</b>${cur?' <span class="pos">· playing</span>':''}<br><span class="dim">${g.y}${g.over?' · '+(g.over==='bankrupt'?'bankrupt':'finished'):''} · ${money(g.nw)} · saved ${new Date(g.t).toLocaleString()}</span></td>
+ for(const g of L){const cur=g.id===s.id;h+=`<tr><td>${ORIGIN[g.o]||''}${g.sh?' 🔀':''} <b>${g.n}</b>${cur?' <span class="pos">· playing</span>':''}<br><span class="dim">${g.y}${g.over?' · '+(g.over==='bankrupt'?'bankrupt':'finished'):''} · ${money(g.nw)} · saved ${new Date(g.t).toLocaleString()}</span></td>
  <td style="text-align:right;white-space:nowrap">${cur?'':`<button onclick="A.loadGame('${g.id}')">Load</button> <button onclick="A.delGame('${g.id}')">Delete</button>`}</td></tr>`;}
  h+=`</table><div class="choices"><button onclick="A.newGame()">➕ New game (this one stays saved)</button><button onclick="A.copyGame()">📑 Save a copy of this game, to try another path</button>
  <button onclick="A.exportGame()">💾 Export this game to a file</button><button onclick="$('#impFile').click()">📂 Import a game from a file</button><button onclick="closeModal()">Close</button></div>
@@ -899,7 +942,7 @@ A.importGame=f=>{if(!f)return;f.text().then(t=>{let g;try{g=JSON.parse(t)}catch(
 window.A=A;window.closeModal=closeModal;
 initMapZoom();
 try{if(localStorage.getItem('hktheme')==='light'){document.body.classList.add('light');$('#themeBtn').textContent='Dark mode';}}catch(e){}
-s=load();if(s&&s.auctions&&s.auctions.some(a=>!a.rivals))genAuctions();  // saves from before rival bidding
+s=load();if(s)applyTimeline(s.tl);if(s&&s.auctions&&s.auctions.some(a=>!a.rivals))genAuctions();  // saves from before rival bidding
 if(s)save();  // moves an old single-slot save into the Games list
 if(s&&!s.over){render();}else{s=s||freshState('Wong Kar-fai','chiu');render();A.newGame();}
 </script>
